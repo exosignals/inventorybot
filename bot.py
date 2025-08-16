@@ -3,6 +3,8 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 import json
 import os
+from flask import Flask
+import threading
 
 # ================== CONFIGURAÇÕES ==================
 TOKEN = os.getenv("BOT_TOKEN")  # Defina no Render como variável de ambiente BOT_TOKEN
@@ -32,7 +34,7 @@ def peso_total(player):
 def penalidade(player):
     return peso_total(player) > player["peso_max"]
 
-# ----- Comandos -----
+# ----- Comandos do bot -----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     data = load_data()
@@ -169,7 +171,20 @@ async def trocar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Você entregou '{item_transfer['nome']}' para @{alvo_username}."
     )
 
-# ----- Main -----
+# ----- Flask para manter a porta aberta -----
+flask_app = Flask(__name__)
+
+@flask_app.route("/")
+def home():
+    return "Bot online!"
+
+def run_flask():
+    flask_app.run(host="0.0.0.0", port=10000)
+
+# Inicia o Flask em background
+threading.Thread(target=run_flask).start()
+
+# ----- Main do bot -----
 def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
