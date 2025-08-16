@@ -5,6 +5,7 @@ import json
 import os
 from flask import Flask
 import threading
+import time
 
 # ================== CONFIGURAÇÕES ==================
 TOKEN = os.getenv("BOT_TOKEN")  # Defina no Render como variável de ambiente BOT_TOKEN
@@ -12,6 +13,10 @@ DATA_FILE = "players.json"
 
 # Força → Peso Máx
 PESO_MAX = {1: 5, 2: 10, 3: 15, 4: 20, 5: 25, 6: 30}
+
+# Anti-spam
+LAST_COMMAND = {}  # user_id: timestamp
+COOLDOWN = 1  # segundos de espera entre comandos
 
 # ====================================================
 logging.basicConfig(level=logging.INFO)
@@ -34,8 +39,17 @@ def peso_total(player):
 def penalidade(player):
     return peso_total(player) > player["peso_max"]
 
+def anti_spam(user_id):
+    now = time.time()
+    if user_id in LAST_COMMAND and now - LAST_COMMAND[user_id] < COOLDOWN:
+        return False
+    LAST_COMMAND[user_id] = now
+    return True
+
 # ----- Comandos do bot -----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        return
     user = update.effective_user
     data = load_data()
     if str(user.id) not in data:
@@ -51,6 +65,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Você já está registrado! Use /forca para atualizar sua força.")
 
 async def forca(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        return
     user = update.effective_user
     data = load_data()
     if str(user.id) not in data:
@@ -72,6 +88,8 @@ async def forca(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Força definida como {f}. Limite de carga: {PESO_MAX[f]}kg.")
 
 async def additem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        return
     user = update.effective_user
     data = load_data()
     if str(user.id) not in data or not data[str(user.id)]["forca"]:
@@ -96,6 +114,8 @@ async def additem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 async def inv(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        return
     user = update.effective_user
     data = load_data()
     if str(user.id) not in data:
@@ -113,6 +133,8 @@ async def inv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 async def droparitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        return
     user = update.effective_user
     data = load_data()
     if str(user.id) not in data:
@@ -132,6 +154,8 @@ async def droparitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Item '{nome}' não encontrado no inventário.")
 
 async def trocar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        return
     user = update.effective_user
     data = load_data()
     if str(user.id) not in data:
@@ -153,7 +177,6 @@ async def trocar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Você não tem o item '{nome_item}'.")
         return
 
-    # Procurar pelo alvo
     alvo_id = None
     for pid, pdata in data.items():
         if pdata["nome"] == alvo_username:
@@ -163,13 +186,10 @@ async def trocar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Esse jogador não está registrado ou usou outro nome.")
         return
 
-    # Transferência
     player["inventario"].remove(item_transfer)
     data[alvo_id]["inventario"].append(item_transfer)
     save_data(data)
-    await update.message.reply_text(
-        f"Você entregou '{item_transfer['nome']}' para @{alvo_username}."
-    )
+    await update.message.reply_text(f"Você entregou '{item_transfer['nome']}' para @{alvo_username}.")
 
 # ----- Flask para manter a porta aberta -----
 flask_app = Flask(__name__)
@@ -181,11 +201,9 @@ def home():
 def run_flask():
     flask_app.run(host="0.0.0.0", port=10000)
 
-# Inicia o Flask em background
-threading.Thread(target=run_flask).start()
-
 # ----- Main do bot -----
 def main():
+    threading.Thread(target=run_flask).start()
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("forca", forca))
@@ -193,7 +211,6 @@ def main():
     app.add_handler(CommandHandler("inv", inv))
     app.add_handler(CommandHandler("droparitem", droparitem))
     app.add_handler(CommandHandler("trocar", trocar))
-
     app.run_polling()
 
 if __name__ == "__main__":
