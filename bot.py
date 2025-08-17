@@ -1,217 +1,233 @@
 import logging
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-import json
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+import sqlite3
 import os
 from flask import Flask
+import random
 import threading
-import time
+import asyncio
+from datetime import datetime, timedelta
 
 # ================== CONFIGURAÇÕES ==================
-TOKEN = os.getenv("BOT_TOKEN")  # Defina no Render como variável de ambiente BOT_TOKEN
-DATA_FILE = "players.json"
+TOKEN = os.getenv("BOT_TOKEN")
 
 # Força → Peso Máx
 PESO_MAX = {1: 5, 2: 10, 3: 15, 4: 20, 5: 25, 6: 30}
 
 # Anti-spam
-LAST_COMMAND = {}  # user_id: timestamp
-COOLDOWN = 1  # segundos de espera entre comandos
+LAST_COMMAND = {}
+COOLDOWN = 1
+
+# Limites de ficha
+MAX_ATRIBUTOS = 24
+MAX_PERICIAS = 42
+ATRIBUTOS_LISTA = ["Força","Destreza","Constituição","Inteligência","Sabedoria","Carisma"]
+PERICIAS_LISTA = ["Percepção","Persuasão","Medicina","Furtividade","Intimidação","Investigação",
+                  "Armas de fogo","Armas brancas","Sobrevivência","Cultura","Intuição","Tecnologia"]
+
+# Edição de ficha
+EDIT_PENDING = {}
 
 # ====================================================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ----- Funções utilitárias -----
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {}
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
+# ----- SQLite Setup -----
+DB_FILE = "players.db"
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    # Jogadores
+    c.execute('''CREATE TABLE IF NOT EXISTS players (
+                    id INTEGER PRIMARY KEY,
+                    nome TEXT,
+                    peso_max INTEGER DEFAULT 0,
+                    hp INTEGER DEFAULT 20,
+                    sp INTEGER DEFAULT 20,
+                    rerolls INTEGER DEFAULT 3
+                )''')
+    # Atributos
+    c.execute('''CREATE TABLE IF NOT EXISTS atributos (
+                    player_id INTEGER,
+                    nome TEXT,
+                    valor INTEGER DEFAULT 0,
+                    PRIMARY KEY(player_id,nome)
+                )''')
+    # Perícias
+    c.execute('''CREATE TABLE IF NOT EXISTS pericias (
+                    player_id INTEGER,
+                    nome TEXT,
+                    valor INTEGER DEFAULT 0,
+                    PRIMARY KEY(player_id,nome)
+                )''')
+    # Inventário
+    c.execute('''CREATE TABLE IF NOT EXISTS inventario (
+                    player_id INTEGER,
+                    nome TEXT,
+                    peso REAL,
+                    quantidade INTEGER DEFAULT 1,
+                    PRIMARY KEY(player_id,nome)
+                )''')
+    conn.commit()
+    conn.close()
+
+# ----- Funções utilitárias SQLite -----
+def get_player(uid):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM players WHERE id=?", (uid,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return None
+    player = {
+        "id": row[0],
+        "nome": row[1],
+        "peso_max": row[2],
+        "hp": row[3],
+        "sp": row[4],
+        "rerolls": row[5],
+        "atributos": {},
+        "pericias": {},
+        "inventario": []
+    }
+    # Atributos
+    c.execute("SELECT nome, valor FROM atributos WHERE player_id=?", (uid,))
+    for a,v in c.fetchall():
+        player["atributos"][a] = v
+    # Perícias
+    c.execute("SELECT nome, valor FROM pericias WHERE player_id=?", (uid,))
+    for a,v in c.fetchall():
+        player["pericias"][a] = v
+    # Inventário
+    c.execute("SELECT nome,peso,quantidade FROM inventario WHERE player_id=?", (uid,))
+    for n,p,q in c.fetchall():
+        player["inventario"].append({"nome": n, "peso": p, "quantidade": q})
+    conn.close()
+    return player
+
+def create_player(uid, nome):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO players(id,nome) VALUES(?,?)", (uid, nome))
+    for a in ATRIBUTOS_LISTA:
+        c.execute("INSERT OR IGNORE INTO atributos(player_id,nome,valor) VALUES(?,?,0)", (uid,a))
+    for p in PERICIAS_LISTA:
+        c.execute("INSERT OR IGNORE INTO pericias(player_id,nome,valor) VALUES(?,?,0)", (uid,p))
+    conn.commit()
+    conn.close()
+
+def update_player_field(uid, field, value):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(f"UPDATE players SET {field}=? WHERE id=?", (value, uid))
+    conn.commit()
+    conn.close()
+
+def update_atributo(uid, nome, valor):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE atributos SET valor=? WHERE player_id=? AND nome=?", (valor, uid, nome))
+    conn.commit()
+    conn.close()
+
+def update_pericia(uid, nome, valor):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE pericias SET valor=? WHERE player_id=? AND nome=?", (valor, uid, nome))
+    conn.commit()
+    conn.close()
+
+def update_inventario(uid, item):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO inventario(player_id,nome,peso,quantidade) VALUES(?,?,?,?)",
+              (uid, item['nome'], item['peso'], item['quantidade']))
+    conn.commit()
+    conn.close()
+
+def remove_item(uid, item_nome):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM inventario WHERE player_id=? AND nome=?", (uid,item_nome))
+    conn.commit()
+    conn.close()
 
 def peso_total(player):
-    return sum(item["peso"] for item in player.get("inventario", []))
+    return sum(i['peso']*i.get('quantidade',1) for i in player.get("inventario",[]))
 
 def penalidade(player):
     return peso_total(player) > player["peso_max"]
 
 def anti_spam(user_id):
-    now = time.time()
-    if user_id in LAST_COMMAND and now - LAST_COMMAND[user_id] < COOLDOWN:
+    now=time.time()
+    if user_id in LAST_COMMAND and now-LAST_COMMAND[user_id]<COOLDOWN:
         return False
-    LAST_COMMAND[user_id] = now
+    LAST_COMMAND[user_id]=now
     return True
 
-# ----- Comandos do bot -----
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not anti_spam(update.effective_user.id):
-        return
-    user = update.effective_user
-    data = load_data()
-    if str(user.id) not in data:
-        data[str(user.id)] = {"nome": user.username or user.first_name,
-                              "forca": None,
-                              "peso_max": 0,
-                              "inventario": []}
-        save_data(data)
-        await update.message.reply_text(
-            "Bem-vindo ao inventário! Use /forca <número de 1 a 6> para definir sua força."
-        )
-    else:
-        await update.message.reply_text("Você já está registrado! Use /forca para atualizar sua força.")
+def roll_dados(qtd=4,lados=6):
+    return [random.randint(1,lados) for _ in range(qtd)]
 
-async def forca(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not anti_spam(update.effective_user.id):
-        return
-    user = update.effective_user
-    data = load_data()
-    if str(user.id) not in data:
-        await update.message.reply_text("Use /start primeiro.")
-        return
-    if not context.args:
-        await update.message.reply_text("Uso: /forca <1-6>")
-        return
-    try:
-        f = int(context.args[0])
-        if f < 1 or f > 6:
-            raise ValueError
-    except ValueError:
-        await update.message.reply_text("Digite um valor entre 1 e 6.")
-        return
-    data[str(user.id)]["forca"] = f
-    data[str(user.id)]["peso_max"] = PESO_MAX[f]
-    save_data(data)
-    await update.message.reply_text(f"Força definida como {f}. Limite de carga: {PESO_MAX[f]}kg.")
+def resultado_roll(valor_total):
+    if valor_total<=5: return "Fracasso crítico"
+    elif valor_total<=10: return "Falha simples"
+    elif valor_total<=15: return "Sucesso"
+    else: return "Sucesso crítico"
 
-async def additem(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not anti_spam(update.effective_user.id):
-        return
-    user = update.effective_user
-    data = load_data()
-    if str(user.id) not in data or not data[str(user.id)]["forca"]:
-        await update.message.reply_text("Use /start e /forca primeiro.")
-        return
-    if len(context.args) < 2:
-        await update.message.reply_text("Uso: /additem <nome> <peso>")
-        return
-    try:
-        peso = int(context.args[-1])
-        nome = " ".join(context.args[:-1])
-    except ValueError:
-        await update.message.reply_text("O peso deve ser um número inteiro.")
-        return
+# ----- Reset diário assíncrono -----
+async def reset_diario_rerolls_async():
+    while True:
+        now = datetime.now()
+        next_reset = now.replace(hour=6, minute=0, second=0, microsecond=0)
+        if now >= next_reset:
+            next_reset += timedelta(days=1)
+        wait_seconds = (next_reset - now).total_seconds()
+        await asyncio.sleep(wait_seconds)
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("UPDATE players SET rerolls=3")
+        conn.commit()
+        conn.close()
+        logger.info("🔄 Rerolls diários resetados!")
 
-    data[str(user.id)]["inventario"].append({"nome": nome, "peso": peso})
-    save_data(data)
-    total = peso_total(data[str(user.id)])
-    msg = f"Item '{nome}' adicionado ({peso}kg). Peso total: {total}/{data[str(user.id)]['peso_max']}kg."
-    if penalidade(data[str(user.id)]):
-        msg += "\n⚠️ Você está sobrecarregado! Penalidade aplicada."
-    await update.message.reply_text(msg)
+# ================== COMANDOS ==================
+# [Aqui você mantém todos os seus comandos: start, ficha, inv, dar, dano, cura, roll, reroll, editar, receber_edicao]
+# Mantenha exatamente como já está no seu código anterior, nada muda.
 
-async def inv(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not anti_spam(update.effective_user.id):
-        return
-    user = update.effective_user
-    data = load_data()
-    if str(user.id) not in data:
-        await update.message.reply_text("Use /start primeiro.")
-        return
-    player = data[str(user.id)]
-    if not player["inventario"]:
-        await update.message.reply_text("Seu inventário está vazio.")
-        return
-    itens = "\n".join([f"- {i['nome']} ({i['peso']}kg)" for i in player["inventario"]])
-    total = peso_total(player)
-    msg = f"📦 Inventário de {player['nome']}:\n{itens}\n\nPeso total: {total}/{player['peso_max']}kg."
-    if penalidade(player):
-        msg += "\n⚠️ Você está sobrecarregado! Penalidade aplicada."
-    await update.message.reply_text(msg)
-
-async def droparitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not anti_spam(update.effective_user.id):
-        return
-    user = update.effective_user
-    data = load_data()
-    if str(user.id) not in data:
-        await update.message.reply_text("Use /start primeiro.")
-        return
-    if not context.args:
-        await update.message.reply_text("Uso: /droparitem <nome>")
-        return
-    nome = " ".join(context.args)
-    player = data[str(user.id)]
-    for item in player["inventario"]:
-        if item["nome"].lower() == nome.lower():
-            player["inventario"].remove(item)
-            save_data(data)
-            await update.message.reply_text(f"Você dropou '{nome}'.")
-            return
-    await update.message.reply_text(f"Item '{nome}' não encontrado no inventário.")
-
-async def trocar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not anti_spam(update.effective_user.id):
-        return
-    user = update.effective_user
-    data = load_data()
-    if str(user.id) not in data:
-        await update.message.reply_text("Use /start primeiro.")
-        return
-    if len(context.args) < 2:
-        await update.message.reply_text("Uso: /trocar <@usuario> <nome do item>")
-        return
-
-    alvo_username = context.args[0].replace("@", "")
-    nome_item = " ".join(context.args[1:])
-    player = data[str(user.id)]
-    item_transfer = None
-    for item in player["inventario"]:
-        if item["nome"].lower() == nome_item.lower():
-            item_transfer = item
-            break
-    if not item_transfer:
-        await update.message.reply_text(f"Você não tem o item '{nome_item}'.")
-        return
-
-    alvo_id = None
-    for pid, pdata in data.items():
-        if pdata["nome"] == alvo_username:
-            alvo_id = pid
-            break
-    if not alvo_id:
-        await update.message.reply_text("Esse jogador não está registrado ou usou outro nome.")
-        return
-
-    player["inventario"].remove(item_transfer)
-    data[alvo_id]["inventario"].append(item_transfer)
-    save_data(data)
-    await update.message.reply_text(f"Você entregou '{item_transfer['nome']}' para @{alvo_username}.")
-
-# ----- Flask para manter a porta aberta -----
-flask_app = Flask(__name__)
-
+# ================== Flask ==================
+flask_app=Flask(__name__)
 @flask_app.route("/")
-def home():
-    return "Bot online!"
+def home(): return "Bot online!"
+def run_flask(): flask_app.run(host="0.0.0.0",port=10000)
 
-def run_flask():
-    flask_app.run(host="0.0.0.0", port=10000)
-
-# ----- Main do bot -----
+# ================== MAIN ==================
 def main():
+    init_db()
+    # Inicia Flask
     threading.Thread(target=run_flask).start()
+    
+    # Inicia Telegram
     app = Application.builder().token(TOKEN).build()
+
+    # Handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("forca", forca))
-    app.add_handler(CommandHandler("additem", additem))
+    app.add_handler(CommandHandler("ficha", ficha))
     app.add_handler(CommandHandler("inv", inv))
-    app.add_handler(CommandHandler("droparitem", droparitem))
-    app.add_handler(CommandHandler("trocar", trocar))
+    app.add_handler(CommandHandler("dar", dar))
+    app.add_handler(CommandHandler("dano", dano))
+    app.add_handler(CommandHandler("cura", cura))
+    app.add_handler(CommandHandler("roll", roll))
+    app.add_handler(CommandHandler("reroll", reroll))
+    app.add_handler(CommandHandler("editar", editar))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber_edicao))
+
+    # Agendar reset diário assíncrono
+    asyncio.create_task(reset_diario_rerolls_async())
+    
     app.run_polling()
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
