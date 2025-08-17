@@ -29,9 +29,6 @@ PERICIAS_LISTA = ["Percepção","Persuasão","Medicina","Furtividade","Intimida�
 # Edição de ficha
 EDIT_PENDING = {}
 
-# Controle de ficha completa em memória
-FICHA_COMPLETA = {}
-
 # ================== LOGGING ==================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -216,16 +213,6 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not player:
         await update.message.reply_text("Você precisa usar /start primeiro!")
         return
-
-    # ✅ Checa se a ficha já foi completada
-    if not FICHA_COMPLETA.get(uid, False):
-        await update.message.reply_text(
-            "📝 Parece que sua ficha ainda não está completa.\n"
-            "Deseja preencher seus atributos e perícias agora?\n"
-            "Responda com /editar para começar."
-        )
-        return
-
     text = "📝 Ficha de RPG\n\n🔹 Atributos (máx 24 pontos):\n"
     for a in ATRIBUTOS_LISTA:
         val = player["atributos"].get(a,0)
@@ -274,12 +261,129 @@ async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 player["pericias"][key] = val
                 update_pericia(uid,key,val)
     EDIT_PENDING.pop(uid)
-    # Marcar ficha como completa
-    FICHA_COMPLETA[uid] = True
-    await update.message.reply_text("✅ Ficha atualizada e marcada como completa!")
+    await update.message.reply_text("✅ Ficha atualizada!")
 
-# ... (restante dos comandos, inv, dar, dano, cura, terapia, roll, reroll, additem)
-# Você mantém exatamente como estava no seu código original
+# /inv
+async def inv(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    player = get_player(uid)
+    if not player:
+        await update.message.reply_text("Use /start primeiro!")
+        return
+    text = f"📦 Inventário de {player['nome']}:\n"
+    for i in player['inventario']:
+        text += f"- {i['nome']} x{i['quantidade']} ({i['peso']}kg cada)\n"
+    text += f"Peso total: {peso_total(player)}/{player['peso_max']}"
+    if penalidade(player):
+        text += " ⚠️ Sobrecarregado!"
+    await update.message.reply_text(text)
+
+# /dar @jogador item qtd
+async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args)<3:
+        await update.message.reply_text("Use /dar @jogador nome_do_item quantidade")
+        return
+    uid_from = update.effective_user.id
+    item_nome = ' '.join(context.args[1:-1])
+    try:
+        qtd = int(context.args[-1])
+    except:
+        await update.message.reply_text("Quantidade inválida!")
+        return
+    user_tag = context.args[0]
+    if not user_tag.startswith('@'):
+        await update.message.reply_text("Mencione o jogador corretamente (@nome)")
+        return
+    # Buscar player destino pelo username
+    await update.message.reply_text(f"💡 Transferência simulada: {item_nome} x{qtd} para {user_tag}\n(Implementar mapeamento real de username para UID)")
+    # Aqui você faria a lógica real de transferência
+
+# /dano e /cura
+async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    player = get_player(uid)
+    if not player:
+        await update.message.reply_text("Use /start primeiro!")
+        return
+    if len(context.args)==0:
+        await update.message.reply_text("Use /dano hp ou /dano sp")
+        return
+    tipo = context.args[0].lower()
+    dado = random.randint(1,6)
+    if tipo=='hp':
+        before = player['hp']
+        player['hp'] = max(0, before - dado)
+        update_player_field(uid,'hp',player['hp'])
+        msg = f"{player['nome']}: HP {before} → {player['hp']} (-{dado})"
+        if player['hp']==0:
+            msg += "\n💀 Desmaiou! Está em coma. Use /coma."
+        await update.message.reply_text(msg)
+    elif tipo=='sp':
+        before = player['sp']
+        player['sp'] = max(0, before - dado)
+        update_player_field(uid,'sp',player['sp'])
+        msg = f"{player['nome']}: SP {before} → {player['sp']} (-{dado})"
+        if player['sp']==0:
+            msg += "\n😵 Trauma severo! Use /trauma."
+        await update.message.reply_text(msg)
+    else:
+        await update.message.reply_text("Tipo inválido! Use hp ou sp.")
+
+async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    player = get_player(uid)
+    if not player or len(context.args)<1:
+        await update.message.reply_text("Use /cura @jogador Kit_Básico +2")
+        return
+    dado = random.randint(1,6)
+    bonus = 0
+    if "Medicina" in player['pericias']:
+        bonus = player['pericias']["Medicina"]
+    total = dado + bonus
+    before = player['hp']
+    player['hp'] = min(20, before + total)
+    update_player_field(uid,'hp',player['hp'])
+    await update.message.reply_text(f"{player['nome']}: HP {before} → {player['hp']} (+{total})")
+
+async def terapia(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    player = get_player(uid)
+    if not player or len(context.args)<1:
+        await update.message.reply_text("Use /terapia @jogador +3")
+        return
+    dado = random.randint(1,6)
+    bonus = 0
+    if "Persuasão" in player['pericias']:
+        bonus = player['pericias']["Persuasão"]
+    total = dado + bonus
+    before = player['sp']
+    player['sp'] = min(20, before + total)
+    update_player_field(uid,'sp',player['sp'])
+    await update.message.reply_text(f"{player['nome']}: SP {before} → {player['sp']} (+{total})")
+
+# /roll e /reroll
+async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    player = get_player(uid)
+    if not player or len(context.args)<1:
+        await update.message.reply_text("Use /roll nome_da_pericia_ou_atributo")
+        return
+    key = ' '.join(context.args)
+    bonus = player['atributos'].get(key,0) + player['pericias'].get(key,0)
+    total = sum(roll_dados()) + bonus
+    res = resultado_roll(total)
+    await update.message.reply_text(f"{key}: {total} → {res}")
+
+async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    player = get_player(uid)
+    if not player:
+        return
+    if player['rerolls']<=0:
+        await update.message.reply_text("Você não tem rerolls disponíveis hoje!")
+        return
+    await roll(update, context)
+    update_player_field(uid,'rerolls',player['rerolls']-1)
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
@@ -305,7 +409,6 @@ def main():
     app.add_handler(CommandHandler("reroll", reroll))
     app.add_handler(CommandHandler("editar", editar))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber_edicao))
-    app.add_handler(CommandHandler("additem", additem))
     app.run_polling()
 
 if __name__=="__main__":
