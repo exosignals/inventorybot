@@ -37,7 +37,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ================== SQLITE ==================
-DB_FILE = "players.db"
+# Banco persistente no Render (ou outro serviço de deploy)
+DB_FILE = "/data/players.db"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
