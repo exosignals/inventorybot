@@ -385,6 +385,35 @@ async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await roll(update, context)
     update_player_field(uid,'rerolls',player['rerolls']-1)
 
+# /additem nome peso quantidade
+async def additem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    player = get_player(uid)
+    if not player:
+        await update.message.reply_text("Use /start primeiro!")
+        return
+    if len(context.args) < 3:
+        await update.message.reply_text("Use /additem Nome_do_Item peso quantidade")
+        return
+    item_nome = ' '.join(context.args[:-2])
+    try:
+        peso = float(context.args[-2])
+        quantidade = int(context.args[-1])
+    except:
+        await update.message.reply_text("Peso ou quantidade inválidos!")
+        return
+    # Verifica se o item já existe no inventário
+    for i in player['inventario']:
+        if i['nome'].lower() == item_nome.lower():
+            i['quantidade'] += quantidade
+            update_inventario(uid, i)
+            await update.message.reply_text(f"✅ {quantidade}x {item_nome} adicionados! Total: {i['quantidade']}")
+            return
+    # Se não existe, adiciona novo
+    novo_item = {"nome": item_nome, "peso": peso, "quantidade": quantidade}
+    update_inventario(uid, novo_item)
+    await update.message.reply_text(f"✅ {quantidade}x {item_nome} adicionados ao inventário!")
+
 # ================== FLASK ==================
 flask_app = Flask(__name__)
 @flask_app.route("/")
@@ -409,6 +438,7 @@ def main():
     app.add_handler(CommandHandler("reroll", reroll))
     app.add_handler(CommandHandler("editar", editar))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber_edicao))
+    app.add_handler(CommandHandler("additem", additem))
     app.run_polling()
 
 if __name__=="__main__":
