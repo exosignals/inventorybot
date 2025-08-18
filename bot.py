@@ -271,8 +271,7 @@ def adjust_item_quantity(uid, item_nome, delta):
     return True
 
 
-def get_catalog_item(nome:
-                     str):
+def get_catalog_item(nome: str):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT nome,peso FROM catalogo WHERE LOWER(nome)=LOWER(?)", (nome,))
@@ -546,6 +545,14 @@ async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Salva alterações no jogador
     player["atributos"] = {k: EDIT_TEMP[k] for k in ATRIBUTOS_LISTA}
     player["pericias"] = {k: EDIT_TEMP[k] for k in PERICIAS_LISTA}
+
+    # Salva no banco de dados!
+    for atr in ATRIBUTOS_LISTA:
+        update_atributo(uid, atr, player["atributos"][atr])
+    for per in PERICIAS_LISTA:
+        update_pericia(uid, per, player["pericias"][per])
+    ensure_peso_max_by_forca(uid)  # atualiza peso máximo conforme Força
+
     await update.message.reply_text("✅ Ficha atualizada com sucesso!")
     EDIT_PENDING.pop(uid, None)
 
