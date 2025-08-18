@@ -380,12 +380,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         create_player(uid, nome, username)
     register_username(uid, username, nome)
     await update.message.reply_text(
-    f"\u200B\n 𐚁 𝗕𝗼𝗮𝘀 𝘃𝗶𝗻𝗱𝗮𝘀, {nome} .ᐟ \n\n"
-    "Este bot gerencia seus Dados, Ficha, Inventário, Vida e Sanidade, além de diversos outros sistemas que você poderá explorar!\n\n"
+    f"\u200B\n 𐚁  𝗕𝗼𝗮𝘀 𝘃𝗶𝗻𝗱𝗮𝘀, {nome} ! \n\n"
+    "Este bot gerencia seus Dados, Ficha, Inventário, Vida e Sanidade, além de diversos outros sistemas que você poderá explorar.\n\n"
     "Use o comando <b>/ficha</b> para visualizar sua ficha atual. "
     "Para editá-la, use o comando <b>/editarficha</b>.\n\n"
     "Outros comandos úteis: <b>/inventario</b>, <b>/itens</b>, <b>/dar</b>, <b>/cura</b>, <b>/terapia</b>, <b>/coma</b>, <b>/ajudar</b>.\n\n"
-    "𝗔𝗽𝗿𝗼𝘃𝗲𝗶𝘁𝗲.\n\u200B",
+    " 𝗔𝗽𝗿𝗼𝘃𝗲𝗶𝘁𝗲!\n\u200B",
     parse_mode="HTML"
 )
 
@@ -399,19 +399,19 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not player:
         await update.message.reply_text("Você precisa usar /start primeiro!")
         return
-    text = "\u200B\n\u200B 「  ཀ  𝗗𝗘𝗔𝗗𝗟𝗜𝗡𝗘, ficha.  」​\u200B\n\n ✦︎ 𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀 ﹕ <i>(20 Pontos)</i>\n"
+    text = "\u200B\n\u200B 「  ཀ  𝗗𝗘𝗔𝗗𝗟𝗜𝗡𝗘, ficha.  」​\u200B\n\n ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  (20 Pontos)\n"
     for a in ATRIBUTOS_LISTA:
         val = player["atributos"].get(a, 0)
-        text += f" — {a}: {val}\n"
-    text += "\n ✦︎ 𝗣𝗲𝗿𝗶𝗰𝗶𝗮𝘀 ﹕ <i>(40 Pontos)</i>\n"
+        text += f" — {a}﹕{val}\n"
+    text += "\n ✦︎  𝗣𝗲𝗿𝗶𝗰𝗶𝗮𝘀  (40 Pontos)\n"
     for p in PERICIAS_LISTA:
         val = player["pericias"].get(p, 0)
-        text += f" — {p}: {val}\n"
-    text += f"\n ♡  𝗛𝗣  ▸  {player['hp']}\n 𖦹  𝗦𝗣  ▸  {player['sp']}\n"
+        text += f" — {p}﹕{val}\n"
+    text += f"\n 𖹭  𝗛𝗣  ▸  {player['hp']}\n 𖦹  𝗦𝗣  ▸  {player['sp']}\n"
     total_peso = peso_total(player)
     sobre = "  ⚠︎  Você está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
-    text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹﹕{total_peso:.1f}/{player['peso_max']}{sobre}\n\n"
-    text += "Para editar Atributos e Perícias, utilize o comando /editarficha.\nPara gerenciar seu Inventário, utilize o comando /inventario.\n\u200B"
+    text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕{total_peso:.1f}/{player['peso_max']}{sobre}\n\n"
+    text += "<i>Para editar Atributos e Perícias, utilize o comando /editarficha.</i>\n<i>Para gerenciar seu Inventário, utilize o comando /inventario.</i>\n\u200B"
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -511,17 +511,17 @@ async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not player:
         await update.message.reply_text("Use /start primeiro!")
         return
-    lines = [f"\u200B\n 「 📦 」  Inventário de {player['nome']}\n\n"]
+    lines = [f"\u200B\n「 📦 」  Inventário de {player['nome']}\n"]
     if not player['inventario']:
         lines.append("Vazio.")
     else:
         for i in sorted(player['inventario'], key=lambda x: x['nome'].lower()):
-            lines.append(f"— {i['nome']} x{i['quantidade']} ({i['peso']:.2f} kg cada)")
+            lines.append(f" — {i['nome']} x{i['quantidade']} ({i['peso']:.2f} kg cada)")
     total_peso = peso_total(player)
-    lines.append(f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹﹕{total_peso:.1f}/{player['peso_max']} kg\n\u200B")
+    lines.append(f"\n  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹﹕{total_peso:.1f}/{player['peso_max']} kg\n\u200B")
     if penalidade(player):
         excesso = total_peso - player['peso_max']
-        lines.append(f"⚠︎  {excesso:.1f} kg de <b>SOBRECARGA</b>!")
+        lines.append(f" ⚠︎ {excesso:.1f} kg de <b>SOBRECARGA</b>!")
     await update.message.reply_text("\n".join(lines))
 
 async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -532,9 +532,9 @@ async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not data:
         await update.message.reply_text("\u200B\n ☰  Catálogo\nVazio. Use /additem Nome Peso para adicionar.\n\u200B")
         return
-    lines = [" ☰ Catálogo de Itens:"]
+    lines = ["  ☰  Catálogo de Itens\n"]
     for nome, peso in data:
-        lines.append(f"— {nome} ({peso:.2f} kg)")
+        lines.append(f" — {nome} ({peso:.2f} kg)")
     await update.message.reply_text("\n".join(lines))
 
 async def additem(update: Update, context: ContextTypes.DEFAULT_TYPE):
