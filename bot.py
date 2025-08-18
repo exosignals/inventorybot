@@ -380,12 +380,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         create_player(uid, nome, username)
     register_username(uid, username, nome)
     await update.message.reply_text(
-        f" 𐚁 𝐁𝐨𝐚𝐬 𝐯𝐢𝐧𝐝𝐚𝐬, {nome} .ᐟ\n\n"
-        "este bot gerencia seus Dados, Ficha, Inventário, Vida e Sanidade. além de diversos outros sistemas que você poderá explorar ao longo do jogo!\n"
-        "use o comando <b>/ficha</b> para visualizar sua ficha atual. para editar, use o comando <b>/editarficha</b>.\n"
-        "outros comandos úteis: <b>/inventario</b>, <b>/itens</b>, <b>/dar<i>, <b>/cura</b>, <b>/terapia</b>, <b>/coma</b>, <b>/ajudar</b>.\n\n"
-        "𝗔𝗽𝗿𝗼𝘃𝗲𝗶𝘁𝗲."
-    )
+    f"\u200B\n𐚁 𝐁𝐨𝐚𝐬 𝐯𝐢𝐧𝐝𝐚𝐬, {nome} .ᐟ\n\n"
+    "este bot gerencia seus Dados, Ficha, Inventário, Vida e Sanidade. "
+    "além de diversos outros sistemas que você poderá explorar ao longo do jogo!\n"
+    "use o comando <b>/ficha</b> para visualizar sua ficha atual. "
+    "para editar, use o comando <b>/editarficha</b>.\n"
+    "outros comandos úteis: <b>/inventario</b>, <b>/itens</b>, <b>/dar</b>, "
+    "<b>/cura</b>, <b>/terapia</b>, <b>/coma</b>, <b>/ajudar</b>.\n\n"
+    "𝗔𝗽𝗿𝗼𝘃𝗲𝗶𝘁𝗲.\n\u200B",
+    parse_mode="HTML"
+)
+
 
 async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
@@ -427,10 +432,9 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "✏️ Edite sua ficha respondendo apenas os valores que deseja alterar no formato:\n\n"
         "Atributos:\n"
-        "<pre>Força: 1-6\nDestreza: 1-6\nConstituição: 1-6\nInteligência: 1-6\nSabedoria: 1-6\nCarisma: 1-6</pre>\n"
+        "<code>Força: 1-6</code>\n<code>Destreza: 1-6</code>\n<code>Constituição: 1-6</code>\n<code>Inteligência: 1-6</code>\n<code>Sabedoria: 1-6</code>\n<code>Carisma: 1-6</code>\n\n"
         "Perícias:\n"
-        "<pre>Percepção: 1-6\nPersuasão: 1-6\nMedicina: 1-6\nFurtividade: 1-6\nIntimidação: 1-6\nInvestigação: 1-6\n"
-        "Armas de fogo: 1-6\nArmas brancas: 1-6\nSobrevivência: 1-6\nCultura: 1-6\nIntuição: 1-6\nTecnologia: 1-6</pre>\n"
+        "<code>Percepção: 1-6</code>\n<code>Persuasão: 1-6</code>\n<code>Medicina: 1-6</code>\n<code>Furtividade: 1-6</code>\n<code>Intimidação: 1-6</code>\n<code>Investigação: 1-6</code>\n<code>Armas de fogo: 1-6</code>\n<code>Armas brancas: 1-6</code>\n<code>Sobrevivência: 1-6</code>\n<code>Cultura: 1-6</code>\n<code>Intuição: 1-6</code>\n<code>Tecnologia: 1-6</code>\n\n"
         "<b>Limitações</b>:\nAtributos somam até 24\nPerícias até 42."
     )
     await update.message.reply_text(text, parse_mode="HTML")
