@@ -1,7 +1,8 @@
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import os
 from flask import Flask
 import random
@@ -12,39 +13,30 @@ import re
 import unicodedata
 
 def normalizar(texto):
-    texto = texto.lower()  # transforma tudo em minúsculas
-    # remove acentos
+    texto = texto.lower()
     texto = ''.join(c for c in unicodedata.normalize('NFD', texto)
                     if unicodedata.category(c) != 'Mn')
     return texto
 
 # ================== CONFIGURAÇÕES ==================
 TOKEN = os.getenv("BOT_TOKEN")
+DATABASE_URL = os.getenv("NEON_DATABASE_URL")
 
-# Admins (IDs separados por vírgula no env ADMINS)
 ADMIN_IDS = {int(x) for x in os.getenv("ADMINS", "").split(",") if x.strip().isdigit()}
-
-# Força → Peso Máx
 PESO_MAX = {1: 5, 2: 10, 3: 15, 4: 20, 5: 25, 6: 30}
-
-# Anti-spam
 LAST_COMMAND = {}
 COOLDOWN = 1
 
-# Limites de ficha
 MAX_ATRIBUTOS = 24
 MAX_PERICIAS = 42
 ATRIBUTOS_LISTA = ["Força","Destreza","Constituição","Inteligência","Sabedoria","Carisma"]
 PERICIAS_LISTA = ["Percepção","Persuasão","Medicina","Furtividade","Intimidação","Investigação",
                   "Armas de fogo","Armas brancas","Sobrevivência","Cultura","Intuição","Tecnologia"]
-# Dicionários para aceitar entradas sem acento e em qualquer caixa
 ATRIBUTOS_NORMAL = {normalizar(a): a for a in ATRIBUTOS_LISTA}
 PERICIAS_NORMAL = {normalizar(p): p for p in PERICIAS_LISTA}
 
-# Edição de ficha
 EDIT_PENDING = {}
 
-# KITS padronizados
 KIT_BONUS = {
     "kit basico": 1,
     "kit básico": 1,
@@ -60,7 +52,6 @@ KIT_BONUS = {
     "avançado": 3,
 }
 
-# Traumas possíveis quando SP chega a 0
 TRAUMAS = [
     "Hipervigilância: não consegue dormir sem vigiar todas as entradas.",
     "Tremor incontrolável nas mãos em situações de estresse.",
@@ -70,19 +61,18 @@ TRAUMAS = [
     "Aversão a ambientes fechados (claustrofobia aguda).",
 ]
 
-# ================== LOGGING ==================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================== SQLITE ==================
-DB_FILE = "players.db"
+# ================== POSTGRESQL ==================
+def get_conn():
+    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.DictCursor)
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    # Jogadores
     c.execute('''CREATE TABLE IF NOT EXISTS players (
-                    id INTEGER PRIMARY KEY,
+                    id BIGINT PRIMARY KEY,
                     nome TEXT,
                     username TEXT,
                     peso_max INTEGER DEFAULT 15,
@@ -90,71 +80,56 @@ def init_db():
                     sp INTEGER DEFAULT 20,
                     rerolls INTEGER DEFAULT 3
                 )''')
-    # Mapa username → id (mantém histórico/atualizações)
     c.execute('''CREATE TABLE IF NOT EXISTS usernames (
                     username TEXT PRIMARY KEY,
-                    user_id INTEGER,
+                    user_id BIGINT,
                     first_name TEXT,
-                    last_seen INTEGER
+                    last_seen BIGINT
                 )''')
-    # Atributos
     c.execute('''CREATE TABLE IF NOT EXISTS atributos (
-                    player_id INTEGER,
+                    player_id BIGINT,
                     nome TEXT,
                     valor INTEGER DEFAULT 0,
                     PRIMARY KEY(player_id,nome)
                 )''')
-    # Perícias
     c.execute('''CREATE TABLE IF NOT EXISTS pericias (
-                    player_id INTEGER,
+                    player_id BIGINT,
                     nome TEXT,
                     valor INTEGER DEFAULT 0,
                     PRIMARY KEY(player_id,nome)
                 )''')
-    # Inventário por jogador
     c.execute('''CREATE TABLE IF NOT EXISTS inventario (
-                    player_id INTEGER,
+                    player_id BIGINT,
                     nome TEXT,
                     peso REAL,
                     quantidade INTEGER DEFAULT 1,
                     PRIMARY KEY(player_id,nome)
                 )''')
-    # Catálogo global de itens
     c.execute('''CREATE TABLE IF NOT EXISTS catalogo (
                     nome TEXT PRIMARY KEY,
                     peso REAL
                 )''')
-    # Bônus pendente para teste de coma
     c.execute('''CREATE TABLE IF NOT EXISTS coma_bonus (
-                    target_id INTEGER PRIMARY KEY,
+                    target_id BIGINT PRIMARY KEY,
                     bonus INTEGER DEFAULT 0
                 )''')
-
     conn.commit()
-
-    # Reset de rerolls ao iniciar
     c.execute("UPDATE players SET rerolls=3")
     conn.commit()
-
     conn.close()
-
-
-# ----- Funções utilitárias SQLite -----
 
 def register_username(user_id: int, username: str | None, first_name: str | None):
     if not username:
         return
     username = username.lower()
     now = int(time.time())
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO usernames(username, user_id, first_name, last_seen) VALUES(?,?,?,?)",
-              (username, user_id, first_name or '', now))
-    # Atualiza também no players
-    c.execute("UPDATE players SET username=? WHERE id=?", (username, user_id))
+    c.execute("INSERT INTO usernames(username, user_id, first_name, last_seen) VALUES(%s,%s,%s,%s) ON CONFLICT (username) DO UPDATE SET user_id=%s, first_name=%s, last_seen=%s",
+        (username, user_id, first_name or '', now, user_id, first_name or '', now))
+    c.execute("UPDATE players SET username=%s WHERE id=%s", (username, user_id))
     conn.commit()
     conn.close()
-
 
 def username_to_id(user_tag: str) -> int | None:
     if not user_tag:
@@ -163,99 +138,92 @@ def username_to_id(user_tag: str) -> int | None:
         uname = user_tag[1:].lower()
     else:
         uname = user_tag.lower()
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT user_id FROM usernames WHERE username=?", (uname,))
+    c.execute("SELECT user_id FROM usernames WHERE username=%s", (uname,))
     row = c.fetchone()
     conn.close()
     return row[0] if row else None
 
-
 def get_player(uid):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT * FROM players WHERE id=?", (uid,))
+    c.execute("SELECT * FROM players WHERE id=%s", (uid,))
     row = c.fetchone()
     if not row:
         conn.close()
         return None
     player = {
-        "id": row[0],
-        "nome": row[1],
-        "username": row[2],
-        "peso_max": row[3],
-        "hp": row[4],
-        "sp": row[5],
-        "rerolls": row[6],
+        "id": row["id"],
+        "nome": row["nome"],
+        "username": row["username"],
+        "peso_max": row["peso_max"],
+        "hp": row["hp"],
+        "sp": row["sp"],
+        "rerolls": row["rerolls"],
         "atributos": {},
         "pericias": {},
         "inventario": []
     }
     # Atributos
-    c.execute("SELECT nome, valor FROM atributos WHERE player_id=?", (uid,))
+    c.execute("SELECT nome, valor FROM atributos WHERE player_id=%s", (uid,))
     for a, v in c.fetchall():
         player["atributos"][a] = v
     # Perícias
-    c.execute("SELECT nome, valor FROM pericias WHERE player_id=?", (uid,))
+    c.execute("SELECT nome, valor FROM pericias WHERE player_id=%s", (uid,))
     for a, v in c.fetchall():
         player["pericias"][a] = v
     # Inventário
-    c.execute("SELECT nome,peso,quantidade FROM inventario WHERE player_id=?", (uid,))
+    c.execute("SELECT nome,peso,quantidade FROM inventario WHERE player_id=%s", (uid,))
     for n, p, q in c.fetchall():
         player["inventario"].append({"nome": n, "peso": p, "quantidade": q})
     conn.close()
     return player
 
-
 def create_player(uid, nome, username=None):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO players(id,nome,username) VALUES(?,?,?)", (uid, nome, (username or None)))
+    c.execute("INSERT INTO players(id,nome,username) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING", (uid, nome, (username or None)))
     for a in ATRIBUTOS_LISTA:
-        c.execute("INSERT OR IGNORE INTO atributos(player_id,nome,valor) VALUES(?,?,0)", (uid, a))
+        c.execute("INSERT INTO atributos(player_id,nome,valor) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING", (uid, a, 0))
     for p in PERICIAS_LISTA:
-        c.execute("INSERT OR IGNORE INTO pericias(player_id,nome,valor) VALUES(?,?,0)", (uid, p))
+        c.execute("INSERT INTO pericias(player_id,nome,valor) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING", (uid, p, 0))
     conn.commit()
     conn.close()
-
 
 def update_player_field(uid, field, value):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute(f"UPDATE players SET {field}=? WHERE id=?", (value, uid))
+    c.execute(f"UPDATE players SET {field}=%s WHERE id=%s", (value, uid))
     conn.commit()
     conn.close()
-
 
 def update_atributo(uid, nome, valor):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("UPDATE atributos SET valor=? WHERE player_id=? AND nome=?", (valor, uid, nome))
+    c.execute("UPDATE atributos SET valor=%s WHERE player_id=%s AND nome=%s", (valor, uid, nome))
     conn.commit()
     conn.close()
-
 
 def update_pericia(uid, nome, valor):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("UPDATE pericias SET valor=? WHERE player_id=? AND nome=?", (valor, uid, nome))
+    c.execute("UPDATE pericias SET valor=%s WHERE player_id=%s AND nome=%s", (valor, uid, nome))
     conn.commit()
     conn.close()
-
 
 def update_inventario(uid, item):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO inventario(player_id,nome,peso,quantidade) VALUES(?,?,?,?)",
-              (uid, item['nome'], item['peso'], item['quantidade']))
+    c.execute("INSERT INTO inventario(player_id,nome,peso,quantidade) VALUES(%s,%s,%s,%s) ON CONFLICT (player_id, nome) DO UPDATE SET peso=%s, quantidade=%s",
+        (uid, item['nome'], item['peso'], item['quantidade'], item['peso'], item['quantidade']))
     conn.commit()
     conn.close()
 
-
 def adjust_item_quantity(uid, item_nome, delta):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT quantidade, peso FROM inventario WHERE player_id=? AND nome=?", (uid, item_nome))
+    c.execute("SELECT quantidade, peso FROM inventario WHERE player_id=%s AND nome=%s", (uid, item_nome))
     row = c.fetchone()
     if not row:
         conn.close()
@@ -263,67 +231,59 @@ def adjust_item_quantity(uid, item_nome, delta):
     qtd, peso = row
     nova = qtd + delta
     if nova <= 0:
-        c.execute("DELETE FROM inventario WHERE player_id=? AND nome=?", (uid, item_nome))
+        c.execute("DELETE FROM inventario WHERE player_id=%s AND nome=%s", (uid, item_nome))
     else:
-        c.execute("UPDATE inventario SET quantidade=? WHERE player_id=? AND nome=?", (nova, uid, item_nome))
+        c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND nome=%s", (nova, uid, item_nome))
     conn.commit()
     conn.close()
     return True
 
-
 def get_catalog_item(nome: str):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT nome,peso FROM catalogo WHERE LOWER(nome)=LOWER(?)", (nome,))
+    c.execute("SELECT nome,peso FROM catalogo WHERE LOWER(nome)=LOWER(%s)", (nome,))
     row = c.fetchone()
     conn.close()
     if not row:
         return None
     return {"nome": row[0], "peso": row[1]}
 
-
 def add_catalog_item(nome: str, peso: float):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO catalogo(nome,peso) VALUES(?,?)", (nome, peso))
+    c.execute("INSERT INTO catalogo(nome,peso) VALUES(%s,%s) ON CONFLICT (nome) DO UPDATE SET peso=%s", (nome, peso, peso))
     conn.commit()
     conn.close()
 
-
 def del_catalog_item(nome: str) -> bool:
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("DELETE FROM catalogo WHERE LOWER(nome)=LOWER(?)", (nome,))
+    c.execute("DELETE FROM catalogo WHERE LOWER(nome)=LOWER(%s)", (nome,))
     deleted = c.rowcount
     conn.commit()
     conn.close()
     return deleted > 0
 
-
 def list_catalog():
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT nome,peso FROM catalogo ORDER BY nome COLLATE NOCASE")
+    c.execute("SELECT nome,peso FROM catalogo ORDER BY nome COLLATE \"C\"")
     data = c.fetchall()
     conn.close()
     return data
 
-
 def remove_item(uid, item_nome):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("DELETE FROM inventario WHERE player_id=? AND nome=?", (uid, item_nome))
+    c.execute("DELETE FROM inventario WHERE player_id=%s AND nome=%s", (uid, item_nome))
     conn.commit()
     conn.close()
-
 
 def peso_total(player):
     return sum(i['peso'] * i.get('quantidade', 1) for i in player.get("inventario", []))
 
-
 def penalidade(player):
     return peso_total(player) > player["peso_max"]
-
 
 def anti_spam(user_id):
     now = time.time()
@@ -332,10 +292,8 @@ def anti_spam(user_id):
     LAST_COMMAND[user_id] = now
     return True
 
-
 def roll_dados(qtd=4, lados=6):
     return [random.randint(1, lados) for _ in range(qtd)]
-
 
 def resultado_roll(valor_total):
     if valor_total <= 5:
@@ -347,9 +305,7 @@ def resultado_roll(valor_total):
     else:
         return "Sucesso crítico"
 
-
 def parse_float_br(s: str) -> float | None:
-    # aceita "2.5", "2,5", "2" e ignora sufixos tipo "kg"
     s = s.strip().lower().replace("kg", "").strip()
     s = s.replace(",", ".")
     try:
@@ -358,43 +314,36 @@ def parse_float_br(s: str) -> float | None:
     except:
         return None
 
-
 def ensure_peso_max_by_forca(uid: int):
-    """Atualiza peso_max do jogador baseado em Força, se existir na tabela."""
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT valor FROM atributos WHERE player_id=? AND nome='Força'", (uid,))
+    c.execute("SELECT valor FROM atributos WHERE player_id=%s AND nome='Força'", (uid,))
     row = c.fetchone()
     if row:
         valor_forca = max(1, min(6, int(row[0])))
         novo = PESO_MAX.get(valor_forca, 15)
-        c.execute("UPDATE players SET peso_max=? WHERE id=?", (novo, uid))
+        c.execute("UPDATE players SET peso_max=%s WHERE id=%s", (novo, uid))
         conn.commit()
     conn.close()
 
-
 def add_coma_bonus(target_id: int, delta: int):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO coma_bonus(target_id, bonus) VALUES(?,0)", (target_id,))
-    c.execute("UPDATE coma_bonus SET bonus = bonus + ? WHERE target_id=?", (delta, target_id))
+    c.execute("INSERT INTO coma_bonus(target_id, bonus) VALUES(%s,0) ON CONFLICT (target_id) DO NOTHING", (target_id,))
+    c.execute("UPDATE coma_bonus SET bonus = bonus + %s WHERE target_id=%s", (delta, target_id))
     conn.commit()
     conn.close()
 
-
 def pop_coma_bonus(target_id: int) -> int:
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT bonus FROM coma_bonus WHERE target_id=?", (target_id,))
+    c.execute("SELECT bonus FROM coma_bonus WHERE target_id=%s", (target_id,))
     row = c.fetchone()
     bonus = row[0] if row else 0
-    c.execute("DELETE FROM coma_bonus WHERE target_id=?", (target_id,))
+    c.execute("DELETE FROM coma_bonus WHERE target_id=%s", (target_id,))
     conn.commit()
     conn.close()
     return bonus
-
-
-# ----- Função de reset diário às 6h -----
 
 def reset_diario_rerolls():
     while True:
@@ -404,25 +353,20 @@ def reset_diario_rerolls():
             next_reset += timedelta(days=1)
         wait_seconds = (next_reset - now).total_seconds()
         time.sleep(wait_seconds)
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_conn()
         c = conn.cursor()
         c.execute("UPDATE players SET rerolls=3")
         conn.commit()
         conn.close()
         logger.info("🔄 Rerolls diários resetados!")
 
-
-# ================== HELPERS TELEGRAM ==================
-
 def is_admin(uid: int) -> bool:
     return uid in ADMIN_IDS
-
 
 def mention(user):
     if user.username:
         return f"@{user.username}"
     return user.first_name or "Jogador"
-
 
 # ================== COMANDOS ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -442,7 +386,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Comandos úteis: /inventario, /itens, /dar, /cura, /terapia, /coma, /ajudar.\n"
         "Boa aventura!"
     )
-
 
 async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
@@ -469,8 +412,6 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += "Para editar a ficha, use /editarficha"
     await update.message.reply_text(text)
 
-
-# ================== /editarficha ==================
 async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -481,17 +422,14 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Use /start primeiro!")
         return
 
-    EDIT_PENDING[uid] = True  # marca que esse player está editando
+    EDIT_PENDING[uid] = True
     text = "✏️ Edite sua ficha respondendo apenas os valores que deseja alterar no formato:\n"
     text += "Força: 3\nDestreza: 4\n...\nPercepção: 5\n...\n\nLimites: atributos somam até 24, perícias até 42; cada campo entre 1–6."
     await update.message.reply_text(text)
 
-
-# ================== Recebe edição ==================
 async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in EDIT_PENDING:
-        # mesmo sem edição, registra username
         register_username(uid, update.effective_user.username, update.effective_user.first_name)
         return
 
@@ -502,7 +440,7 @@ async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
     EDIT_TEMP = player["atributos"].copy()
-    EDIT_TEMP.update(player["pericias"])  # mistura temporária atributos+perícias
+    EDIT_TEMP.update(player["pericias"])
 
     linhas = text.split("\n")
     for linha in linhas:
@@ -510,7 +448,7 @@ async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
         try:
             key, val = linha.split(":")
-            key = normalizar(key)  # transforma em minúscula e remove acento
+            key = normalizar(key)
             val = int(val.strip())
         except:
             await update.message.reply_text(f"❌ Formato inválido na linha: {linha}")
@@ -542,21 +480,18 @@ async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Campo não reconhecido: {key}")
             return
 
-    # Salva alterações no jogador
     player["atributos"] = {k: EDIT_TEMP[k] for k in ATRIBUTOS_LISTA}
     player["pericias"] = {k: EDIT_TEMP[k] for k in PERICIAS_LISTA}
 
-    # Salva no banco de dados!
     for atr in ATRIBUTOS_LISTA:
         update_atributo(uid, atr, player["atributos"][atr])
     for per in PERICIAS_LISTA:
         update_pericia(uid, per, player["pericias"][per])
-    ensure_peso_max_by_forca(uid)  # atualiza peso máximo conforme Força
+    ensure_peso_max_by_forca(uid)
 
     await update.message.reply_text("✅ Ficha atualizada com sucesso!")
     EDIT_PENDING.pop(uid, None)
 
-# /inventario (substitui /inv)
 async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -580,8 +515,6 @@ async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"⚠️ Sobrecarregado em {excesso:.1f} kg!")
     await update.message.reply_text("\n".join(lines))
 
-
-# Catálogo
 async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -595,7 +528,6 @@ async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"- {nome} ({peso:.2f} kg)")
     await update.message.reply_text("\n".join(lines))
 
-
 async def additem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -607,7 +539,6 @@ async def additem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
         await update.message.reply_text("Uso: /additem NomeDoItem Peso\nEx.: /additem Escopeta 3,5 kg")
         return
-    # Nome pode ter espaços, peso é o último token
     peso_str = context.args[-1]
     nome = " ".join(context.args[:-1])
     peso = parse_float_br(peso_str)
@@ -616,7 +547,6 @@ async def additem(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     add_catalog_item(nome, peso)
     await update.message.reply_text(f"✅ Item '{nome}' adicionado ao catálogo com {peso:.2f} kg. (Inventário de mestre é virtual e inesgotável.)")
-
 
 async def delitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
@@ -636,8 +566,6 @@ async def delitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ Item não encontrado no catálogo.")
 
-
-# /dar @jogador NomeDoItem [x quantidade]
 async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -652,7 +580,7 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not target_id:
         await update.message.reply_text("❌ Jogador não encontrado. Peça para a pessoa usar /start pelo menos uma vez.")
         return
-    # Extrai quantidade opcional no final ("x 3" ou apenas "3")
+
     qtd = 1
     tail = context.args[1:]
     if len(tail) >= 2 and tail[-2].lower() == 'x' and tail[-1].isdigit():
@@ -673,7 +601,6 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Item não está no catálogo. Use /itens para ver os disponíveis.")
         return
 
-    # Checa peso
     target = get_player(target_id)
     if not target:
         await update.message.reply_text("❌ O alvo ainda não iniciou o bot (/start).")
@@ -687,17 +614,15 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ {target['nome']} ficaria sobrecarregado em {excesso:.1f} kg. Item não foi adicionado.")
         return
 
-    # Atualiza inventário do alvo
-    # Busca se já tem
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT quantidade FROM inventario WHERE player_id=? AND nome=?", (target_id, cat['nome']))
+    c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND nome=%s", (target_id, cat['nome']))
     row = c.fetchone()
     if row:
         nova = row[0] + qtd
-        c.execute("UPDATE inventario SET quantidade=? WHERE player_id=? AND nome=?", (nova, target_id, cat['nome']))
+        c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND nome=%s", (nova, target_id, cat['nome']))
     else:
-        c.execute("INSERT INTO inventario(player_id,nome,peso,quantidade) VALUES(?,?,?,?)",
+        c.execute("INSERT INTO inventario(player_id,nome,peso,quantidade) VALUES(%s,%s,%s,%s)",
                   (target_id, cat['nome'], cat['peso'], qtd))
     conn.commit()
     conn.close()
@@ -705,8 +630,6 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ Entregue: {cat['nome']} x{qtd} para {user_tag}. Peso total agora: {total_depois:.1f}/{target['peso_max']} kg.")
 
-
-# /dano hp|sp [@alvo]
 async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -762,8 +685,6 @@ async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"\n😵 Trauma severo! {trauma}"
         await update.message.reply_text(msg)
 
-
-# /cura @alvo NomeDoKit
 async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -787,29 +708,25 @@ async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Kit inválido. Use: Kit Básico, Kit Intermediário ou Kit Avançado.")
         return
 
-    # Verifica se o curandeiro possui o kit e consome 1
     healer = get_player(uid)
-    # Normaliza busca pelo nome do catálogo para pegar peso correto (caso nomes divergentes)
     cat = get_catalog_item(kit_nome)
     inv_nome = cat['nome'] if cat else kit_nome
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT quantidade,peso FROM inventario WHERE player_id=? AND LOWER(nome)=LOWER(?)", (uid, inv_nome))
+    c.execute("SELECT quantidade,peso FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, inv_nome))
     row = c.fetchone()
     if not row or row[0] <= 0:
         await update.message.reply_text(f"❌ Você não possui '{kit_nome}' no inventário.")
         conn.close()
         return
-    # Consome 1 unidade do kit
     nova = row[0] - 1
     if nova <= 0:
-        c.execute("DELETE FROM inventario WHERE player_id=? AND LOWER(nome)=LOWER(?)", (uid, inv_nome))
+        c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, inv_nome))
     else:
-        c.execute("UPDATE inventario SET quantidade=? WHERE player_id=? AND LOWER(nome)=LOWER(?)", (nova, uid, inv_nome))
+        c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, inv_nome))
     conn.commit()
     conn.close()
 
-    # Rola cura
     dado = random.randint(1, 6)
     bonus_med = healer['pericias'].get('Medicina', 0)
     total = dado + bonus_kit + bonus_med
@@ -829,8 +746,6 @@ async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg)
 
-
-# /terapia @alvo (só para outro jogador)
 async def terapia(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -868,8 +783,6 @@ async def terapia(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg)
 
-
-# /coma (4d6 + bônus acumulado de /ajudar)
 async def coma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -890,7 +803,6 @@ async def coma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bonus_ajuda = pop_coma_bonus(uid)
     total = soma + bonus_ajuda
 
-    # Resultado
     if total <= 5:
         status = "☠️ Morte."
     elif total <= 10:
@@ -911,8 +823,6 @@ async def coma(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
     )
 
-
-# /ajudar @jogador NomeDoKit (aplica bônus no próximo /coma do alvo)
 async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -941,12 +851,11 @@ async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Kit inválido. Use: Kit Básico, Kit Intermediário ou Kit Avançado.")
         return
 
-    # Verifica se o ajudante possui o kit e consome 1
     cat = get_catalog_item(kit_nome)
     inv_nome = cat['nome'] if cat else kit_nome
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT quantidade FROM inventario WHERE player_id=? AND LOWER(nome)=LOWER(?)", (uid, inv_nome))
+    c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, inv_nome))
     row = c.fetchone()
     if not row or row[0] <= 0:
         await update.message.reply_text(f"❌ Você não possui '{kit_nome}' no inventário.")
@@ -954,9 +863,9 @@ async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     nova = row[0] - 1
     if nova <= 0:
-        c.execute("DELETE FROM inventario WHERE player_id=? AND LOWER(nome)=LOWER(?)", (uid, inv_nome))
+        c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, inv_nome))
     else:
-        c.execute("UPDATE inventario SET quantidade=? WHERE player_id=? AND LOWER(nome)=LOWER(?)", (nova, uid, inv_nome))
+        c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, inv_nome))
     conn.commit()
     conn.close()
 
@@ -964,8 +873,6 @@ async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🤝 {mention(update.effective_user)} usou {kit_nome} em {alvo_tag}!\nBônus aplicado ao próximo teste de coma: +{bonus}.")
 
-
-# /roll e /reroll (mantidos, mas com verificação de chave)
 async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -996,7 +903,6 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🎲 /roll {key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}\nTotal: {total} → {res}")
 
-
 async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -1009,37 +915,28 @@ async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if player['rerolls'] <= 0:
         await update.message.reply_text("Você não tem rerolls disponíveis hoje!")
         return
-    # Consome reroll e executa /roll com os mesmos args
     update_player_field(uid, 'rerolls', player['rerolls'] - 1)
     await roll(update, context)
 
-
 # ================== FLASK ==================
 flask_app = Flask(__name__)
-
 
 @flask_app.route("/")
 def home():
     return "Bot online!"
 
-
 def run_flask():
     flask_app.run(host="0.0.0.0", port=10000)
 
-
 # ================== MAIN ==================
-
 def main():
     init_db()
     threading.Thread(target=run_flask).start()
     threading.Thread(target=reset_diario_rerolls, daemon=True).start()
-
     app = Application.builder().token(TOKEN).build()
-
-    # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ficha", ficha))
-    app.add_handler(CommandHandler("inventario", inventario))  # novo
+    app.add_handler(CommandHandler("inventario", inventario))
     app.add_handler(CommandHandler("itens", itens))
     app.add_handler(CommandHandler("additem", additem))
     app.add_handler(CommandHandler("delitem", delitem))
@@ -1051,13 +948,9 @@ def main():
     app.add_handler(CommandHandler("ajudar", ajudar))
     app.add_handler(CommandHandler("roll", roll))
     app.add_handler(CommandHandler("reroll", reroll))
-    app.add_handler(CommandHandler("editarficha", editarficha))  # substitui /editar
-
-    # Mensagens livres para captura da edição de ficha e registrar username
+    app.add_handler(CommandHandler("editarficha", editarficha))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber_edicao))
-
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
