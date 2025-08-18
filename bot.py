@@ -11,6 +11,12 @@ from datetime import datetime, timedelta
 import re
 import unicodedata
 
+def normalizar(texto):
+    texto = texto.lower()  # transforma tudo em minúsculas
+    # remove acentos
+    texto = ''.join(c for c in unicodedata.normalize('NFD', texto)
+                    if unicodedata.category(c) != 'Mn')
+    return texto
 
 # ================== CONFIGURAÇÕES ==================
 TOKEN = os.getenv("BOT_TOKEN")
@@ -70,13 +76,6 @@ logger = logging.getLogger(__name__)
 
 # ================== SQLITE ==================
 DB_FILE = "players.db"
-
-def normalizar(texto):
-    texto = texto.lower()  # transforma tudo em minúsculas
-    # remove acentos
-    texto = ''.join(c for c in unicodedata.normalize('NFD', texto)
-                    if unicodedata.category(c) != 'Mn')
-    return texto
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
