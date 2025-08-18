@@ -27,8 +27,8 @@ PESO_MAX = {1: 5, 2: 10, 3: 15, 4: 20, 5: 25, 6: 30}
 LAST_COMMAND = {}
 COOLDOWN = 1
 
-MAX_ATRIBUTOS = 24
-MAX_PERICIAS = 42
+MAX_ATRIBUTOS = 20
+MAX_PERICIAS = 40
 ATRIBUTOS_LISTA = ["Força","Destreza","Constituição","Inteligência","Sabedoria","Carisma"]
 PERICIAS_LISTA = ["Percepção","Persuasão","Medicina","Furtividade","Intimidação","Investigação",
                   "Armas de fogo","Armas brancas","Sobrevivência","Cultura","Intuição","Tecnologia"]
@@ -371,7 +371,7 @@ def mention(user):
 # ================== COMANDOS ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     uid = update.effective_user.id
     nome = update.effective_user.first_name
@@ -380,7 +380,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         create_player(uid, nome, username)
     register_username(uid, username, nome)
     await update.message.reply_text(
-    f"\u200B\n𐚁 𝐁𝐨𝐚𝐬 𝐯𝐢𝐧𝐝𝐚𝐬, {nome} .ᐟ\n\n"
+    f"\u200B\n𐚁  𝗕𝗼𝗮𝘀 𝘃𝗶𝗻𝗱𝗮𝘀, {nome}﹗\n\n"
     "este bot gerencia seus Dados, Ficha, Inventário, Vida e Sanidade. "
     "além de diversos outros sistemas que você poderá explorar ao longo do jogo!\n"
     "use o comando <b>/ficha</b> para visualizar sua ficha atual. "
@@ -391,10 +391,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parse_mode="HTML"
 )
 
-
 async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
@@ -402,24 +401,24 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not player:
         await update.message.reply_text("Você precisa usar /start primeiro!")
         return
-    text = "📝 Ficha de RPG\n\n🔹 Atributos (máx 24 pontos):\n"
+    text = "\u200B\n\u200B「  🗎 𝗗𝗘𝗔𝗗𝗟𝗜𝗡𝗘, ficha  」\u200B\n\n ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀 ﹕(20 Pontos)\n"
     for a in ATRIBUTOS_LISTA:
         val = player["atributos"].get(a, 0)
         text += f"- {a} (1-6): {val}\n"
-    text += "\n🔹 Perícias (máx 42 pontos):\n"
+    text += "\n ✦︎  𝗣𝗲𝗿𝛊́𝗰𝗶𝗮𝘀 ﹕(20 Pontos)\n"
     for p in PERICIAS_LISTA:
         val = player["pericias"].get(p, 0)
         text += f"- {p} (1-6): {val}\n"
-    text += f"\n❤️ HP: {player['hp']}\n🧠 SP: {player['sp']}\n"
+    text += f"\n ♥︎  𝗛𝗣 ▸ {player['hp']}\n 𖦹  𝗦𝗣 ▸ {player['sp']}\n"
     total_peso = peso_total(player)
-    sobre = " ⚠️ Sobrecarregado!" if penalidade(player) else ""
-    text += f"\n📦 Peso total do inventário: {total_peso:.1f}/{player['peso_max']}{sobre}\n\n"
-    text += "Para editar a ficha, use /editarficha"
-    await update.message.reply_text(text)
+    sobre = "  ⚠︎  Você está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
+    text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹﹕{total_peso:.1f}/{player['peso_max']}{sobre}\n\n"
+    text += "Para editar Atributos e Perícias, utilize o comando /editarficha.\n Para gerenciar seu Inventário, utilize o comando /inventario."
+    await update.message.reply_text(text, parse_mode="HTML")
 
 async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
 
     uid = update.effective_user.id
@@ -430,12 +429,12 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     EDIT_PENDING[uid] = True
     text = (
-        "✏️ Edite sua ficha respondendo apenas os valores que deseja alterar no formato:\n\n"
-        "Atributos:\n"
-        "<code>Força: 1-6</code>\n<code>Destreza: 1-6</code>\n<code>Constituição: 1-6</code>\n<code>Inteligência: 1-6</code>\n<code>Sabedoria: 1-6</code>\n<code>Carisma: 1-6</code>\n\n"
-        "Perícias:\n"
+        "\u200B\n✎... Para editar os pontos em sua ficha, responda em apenas uma mensagem todas as alterações que deseja realizar, com base no modelo à seguir ↴ \n\n"
+        "𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀:\n"
+        "<code>Força: </code>\n<code>Destreza: </code>\n<code>Constituição: </code>\n<code>Inteligência: </code>\n<code>Sabedoria: </code>\n<code>Carisma: </code>\n\n"
+        "𝗣𝗲𝗿𝛊́𝗰𝗶𝗮𝘀:\n"
         "<code>Percepção: 1-6</code>\n<code>Persuasão: 1-6</code>\n<code>Medicina: 1-6</code>\n<code>Furtividade: 1-6</code>\n<code>Intimidação: 1-6</code>\n<code>Investigação: 1-6</code>\n<code>Armas de fogo: 1-6</code>\n<code>Armas brancas: 1-6</code>\n<code>Sobrevivência: 1-6</code>\n<code>Cultura: 1-6</code>\n<code>Intuição: 1-6</code>\n<code>Tecnologia: 1-6</code>\n\n"
-        "<b>Limitações</b>:\nAtributos somam até 24\nPerícias até 42."
+        "  ⚠ <b>ATENÇÃO</b> \nCada Atributo e Perícia deve conter, sem exeção, entre 1 e 6 pontos.\nA soma de todos o pontos de Atributos deve totalizar 20\nA soma de todos o pontos de Perícia deve totalizar 40.\n\u200B"
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -469,22 +468,22 @@ async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if key in ATRIBUTOS_NORMAL:
             key_real = ATRIBUTOS_NORMAL[key]
             if val < 1 or val > 6:
-                await update.message.reply_text("❌ Atributos devem estar entre 1 e 6.")
+                await update.message.reply_text("❌ Formato inválido! Atributos devem estar entre 1 e 6.")
                 return
             soma_atributos = sum(EDIT_TEMP.get(a, 0) for a in ATRIBUTOS_LISTA if a != key_real) + val
             if soma_atributos > MAX_ATRIBUTOS:
-                await update.message.reply_text("❌ Total de pontos de atributos excede 24.")
+                await update.message.reply_text("❌ Total de pontos em atributos excede 20.")
                 return
             EDIT_TEMP[key_real] = val
 
         elif key in PERICIAS_NORMAL:
             key_real = PERICIAS_NORMAL[key]
             if val < 1 or val > 6:
-                await update.message.reply_text("❌ Perícias devem estar entre 1 e 6.")
+                await update.message.reply_text("❌ Formato inválido! Perícias devem estar entre 1 e 6.")
                 return
             soma_pericias = sum(EDIT_TEMP.get(p, 0) for p in PERICIAS_LISTA if p != key_real) + val
             if soma_pericias > MAX_PERICIAS:
-                await update.message.reply_text("❌ Total de pontos de perícias excede 42.")
+                await update.message.reply_text("❌ Total de pontos em perícias excede 40.")
                 return
             EDIT_TEMP[key_real] = val
 
@@ -501,12 +500,12 @@ async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update_pericia(uid, per, player["pericias"][per])
     ensure_peso_max_by_forca(uid)
 
-    await update.message.reply_text("✅ Ficha atualizada com sucesso!")
+    await update.message.reply_text(" ✅ Ficha atualizada com sucesso!")
     EDIT_PENDING.pop(uid, None)
 
 async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
@@ -514,55 +513,55 @@ async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not player:
         await update.message.reply_text("Use /start primeiro!")
         return
-    lines = [f"📦 Inventário de {player['nome']}:"]
+    lines = [f"\u200B\n 📦 Inventário de {player['nome']}\n\n"]
     if not player['inventario']:
-        lines.append("(vazio)")
+        lines.append("Vazio.")
     else:
         for i in sorted(player['inventario'], key=lambda x: x['nome'].lower()):
-            lines.append(f"- {i['nome']} x{i['quantidade']} ({i['peso']:.2f} kg cada)")
+            lines.append(f"— {i['nome']} x{i['quantidade']} ({i['peso']:.2f} kg cada)")
     total_peso = peso_total(player)
-    lines.append(f"\nPeso total: {total_peso:.1f}/{player['peso_max']} kg")
+    lines.append(f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹﹕{total_peso:.1f}/{player['peso_max']} kg")
     if penalidade(player):
         excesso = total_peso - player['peso_max']
-        lines.append(f"⚠️ Sobrecarregado em {excesso:.1f} kg!")
+        lines.append(f"⚠︎  {excesso:.1f} kg de <b>SOBRECARGA</b>!")
     await update.message.reply_text("\n".join(lines))
 
 async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     data = list_catalog()
     if not data:
-        await update.message.reply_text("📚 Catálogo vazio. Use /additem Nome Peso para adicionar.")
+        await update.message.reply_text("\u200B\n ☰ Catálogo vazio. Use /additem Nome Peso para adicionar.\n\u200B")
         return
-    lines = ["📚 Catálogo de Itens:"]
+    lines = [" ☰ Catálogo de Itens:"]
     for nome, peso in data:
-        lines.append(f"- {nome} ({peso:.2f} kg)")
+        lines.append(f"— {nome} ({peso:.2f} kg)")
     await update.message.reply_text("\n".join(lines))
 
 async def additem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     uid = update.effective_user.id
     if not is_admin(uid):
         await update.message.reply_text("❌ Apenas administradores podem usar este comando.")
         return
     if len(context.args) < 2:
-        await update.message.reply_text("Uso: /additem NomeDoItem Peso\nEx.: /additem Escopeta 3,5 kg")
+        await update.message.reply_text("Uso: /additem NomeDoItem Peso\nEx.: /additem Escopeta 3,5")
         return
     peso_str = context.args[-1]
     nome = " ".join(context.args[:-1])
     peso = parse_float_br(peso_str)
     if not peso:
-        await update.message.reply_text("❌ Peso inválido. Use algo como 2,5 kg.")
+        await update.message.reply_text("❌ Peso inválido. Use algo como 2,5")
         return
     add_catalog_item(nome, peso)
-    await update.message.reply_text(f"✅ Item '{nome}' adicionado ao catálogo com {peso:.2f} kg. (Inventário de mestre é virtual e inesgotável.)")
+    await update.message.reply_text(f"✅ Item '{nome}' adicionado ao catálogo com {peso:.2f} kg.\n(Inventário de mestre é virtual e inesgotável.)")
 
 async def delitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     uid = update.effective_user.id
     if not is_admin(uid):
@@ -580,10 +579,10 @@ async def delitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     if len(context.args) < 2:
-        await update.message.reply_text("Uso: /dar @jogador Nome_do_item [x quantidade]")
+        await update.message.reply_text("Uso: /dar @jogador Nome do item (exatamente como está no seu inventário) xquantidade (opcional)")
         return
     uid_from = update.effective_user.id
     register_username(uid_from, update.effective_user.username, update.effective_user.first_name)
@@ -623,7 +622,7 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if total_depois > target['peso_max']:
         excesso = total_depois - target['peso_max']
         await update.message.reply_text(
-            f"⚠️ {target['nome']} ficaria sobrecarregado em {excesso:.1f} kg. Item não foi adicionado.")
+            f"⚠️ {target['nome']} sofreria uma sobrecarga de {excesso:.1f} kg. Item não foi adicionado.")
         return
 
     conn = get_conn()
