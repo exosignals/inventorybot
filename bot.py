@@ -380,11 +380,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         create_player(uid, nome, username)
     register_username(uid, username, nome)
     await update.message.reply_text(
-        f"🎲 Bem-vindo, {nome}!\n"
-        "Este bot gerencia sua ficha de RPG, inventário, HP e SP.\n"
-        "Use /ficha para ver sua ficha. Para editar, use /editarficha.\n"
-        "Comandos úteis: /inventario, /itens, /dar, /cura, /terapia, /coma, /ajudar.\n"
-        "Boa aventura!"
+        f" 𐚁 𝐁𝐨𝐚𝐬 𝐯𝐢𝐧𝐝𝐚𝐬, {nome} .ᐟ\n\n"
+        "este bot gerencia seus Dados, Ficha, Inventário, Vida e Sanidade. além de diversos outros sistemas que você poderá explorar ao longo do jogo!\n"
+        "use o comando <b>/ficha</b> para visualizar sua ficha atual. para editar, use o comando <b>/editarficha</b>.\n"
+        "outros comandos úteis: <b>/inventario</b>, <b>/itens</b>, <b>/dar<i>, <b>/cura</b>, <b>/terapia</b>, <b>/coma</b>, <b>/ajudar</b>.\n\n"
+        "𝗔𝗽𝗿𝗼𝘃𝗲𝗶𝘁𝗲."
     )
 
 async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -416,6 +416,7 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
         return
+
     uid = update.effective_user.id
     player = get_player(uid)
     if not player:
@@ -423,9 +424,16 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     EDIT_PENDING[uid] = True
-    text = "✏️ Edite sua ficha respondendo apenas os valores que deseja alterar no formato:\n"
-    text += "Força: 3\nDestreza: 4\n...\nPercepção: 5\n...\n\nLimites: atributos somam até 24, perícias até 42; cada campo entre 1–6."
-    await update.message.reply_text(text)
+    text = (
+        "✏️ Edite sua ficha respondendo apenas os valores que deseja alterar no formato:\n\n"
+        "Atributos:\n"
+        "<pre>Força: 1-6\nDestreza: 1-6\nConstituição: 1-6\nInteligência: 1-6\nSabedoria: 1-6\nCarisma: 1-6</pre>\n"
+        "Perícias:\n"
+        "<pre>Percepção: 1-6\nPersuasão: 1-6\nMedicina: 1-6\nFurtividade: 1-6\nIntimidação: 1-6\nInvestigação: 1-6\n"
+        "Armas de fogo: 1-6\nArmas brancas: 1-6\nSobrevivência: 1-6\nCultura: 1-6\nIntuição: 1-6\nTecnologia: 1-6</pre>\n"
+        "<b>Limitações</b>:\nAtributos somam até 24\nPerícias até 42."
+    )
+    await update.message.reply_text(text, parse_mode="HTML")
 
 async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
