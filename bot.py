@@ -75,9 +75,9 @@ def init_db():
                     id BIGINT PRIMARY KEY,
                     nome TEXT,
                     username TEXT,
-                    peso_max INTEGER DEFAULT 15,
-                    hp INTEGER DEFAULT 20,
-                    sp INTEGER DEFAULT 20,
+                    peso_max INTEGER DEFAULT 0,
+                    hp INTEGER DEFAULT 40,
+                    sp INTEGER DEFAULT 40,
                     rerolls INTEGER DEFAULT 3
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS usernames (
@@ -298,9 +298,9 @@ def roll_dados(qtd=4, lados=6):
 def resultado_roll(valor_total):
     if valor_total <= 5:
         return "Fracasso crítico"
-    elif valor_total <= 10:
-        return "Falha simples"
-    elif valor_total <= 15:
+    elif valor_total <= 12:
+        return "Fracasso"
+    elif valor_total <= 19:
         return "Sucesso"
     else:
         return "Sucesso crítico"
@@ -407,7 +407,7 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for p in PERICIAS_LISTA:
         val = player["pericias"].get(p, 0)
         text += f" — {p}﹕{val}\n"
-    text += f"\n 𖹭  𝗛𝗣  ▸  {player['hp']}\n 𖦹  𝗦𝗣  ▸  {player['sp']}\n"
+    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']}\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']}\n"
     total_peso = peso_total(player)
     sobre = "  ⚠︎  Você está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
     text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f}/{player['peso_max']}{sobre}\n\n"
@@ -427,7 +427,7 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     EDIT_PENDING[uid] = True
     text = (
-        "\u200B\nPara editar os pontos em sua ficha, responda (em apenas uma mensagem) com todas as alterações que deseja realizar, com base no modelo à seguir: \n\n"
+        "\u200B\nPara editar os pontos em sua ficha, responda (em apenas uma mensagem, você pode mudar quantos Atributos/Perícias quiser) com todas as alterações que deseja realizar, com base no modelo à seguir: \n\n"
         " ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  \n"
         "<code>Força: </code>\n<code>Destreza: </code>\n<code>Constituição: </code>\n<code>Inteligência: </code>\n<code>Sabedoria: </code>\n<code>Carisma: </code>\n\n"
         " ✦︎  𝗣𝗲𝗿𝗶𝗰𝗶𝗮𝘀  \n"
@@ -515,7 +515,7 @@ async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     lines = [f"\u200B\n「 📦 」  Inventário de {player['nome']}\n"]
     if not player['inventario']:
-        lines.append("Vazio.")
+        lines.append(" Vazio.")
     else:
         for i in sorted(player['inventario'], key=lambda x: x['nome'].lower()):
             lines.append(f" — {i['nome']} x{i['quantidade']} ({i['peso']:.2f} kg cada)")
