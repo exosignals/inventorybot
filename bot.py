@@ -433,7 +433,7 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         " ✦︎  𝗣𝗲𝗿𝗶𝗰𝗶𝗮𝘀  \n"
         "<code>Percepção: </code>\n<code>Persuasão: </code>\n<code>Medicina: </code>\n<code>Furtividade: </code>\n<code>Intimidação: </code>\n<code>Investigação: </code>\n<code>Armas de fogo: </code>\n<code>Armas brancas: </code>\n<code>Sobrevivência: </code>\n<code>Cultura: </code>\n<code>Intuição: </code>\n<code>Tecnologia: </code>\n\n"
         " ⓘ <b>ATENÇÃO</b>\n<blockquote> ▸ Cada Atributo e Perícia deve conter, sem exceção, entre 1 e 6 pontos.</blockquote>\n"
-        "<blockquote> ▸ A soma de todos o pontos de Atributos deve totalizar 20</blockquote></>\n"
+        "<blockquote> ▸ A soma de todos o pontos de Atributos deve totalizar 20</blockquote>\n"
         "<blockquote> ▸ A soma de todos o pontos de Perícia deve totalizar 40.</blockquote>\n\u200B"
     )
     await update.message.reply_text(text, parse_mode="HTML")
