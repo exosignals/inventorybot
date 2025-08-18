@@ -9,6 +9,8 @@ import threading
 import time
 from datetime import datetime, timedelta
 import re
+import unicodedata
+
 
 # ================== CONFIGURAÇÕES ==================
 TOKEN = os.getenv("BOT_TOKEN")
@@ -29,6 +31,9 @@ MAX_PERICIAS = 42
 ATRIBUTOS_LISTA = ["Força","Destreza","Constituição","Inteligência","Sabedoria","Carisma"]
 PERICIAS_LISTA = ["Percepção","Persuasão","Medicina","Furtividade","Intimidação","Investigação",
                   "Armas de fogo","Armas brancas","Sobrevivência","Cultura","Intuição","Tecnologia"]
+# Dicionários para aceitar entradas sem acento e em qualquer caixa
+ATRIBUTOS_NORMAL = {normalizar(a): a for a in ATRIBUTOS_LISTA}
+PERICIAS_NORMAL = {normalizar(p): p for p in PERICIAS_LISTA}
 
 # Edição de ficha
 EDIT_PENDING = {}
@@ -66,6 +71,12 @@ logger = logging.getLogger(__name__)
 # ================== SQLITE ==================
 DB_FILE = "players.db"
 
+def normalizar(texto):
+    texto = texto.lower()  # transforma tudo em minúsculas
+    # remove acentos
+    texto = ''.join(c for c in unicodedata.normalize('NFD', texto)
+                    if unicodedata.category(c) != 'Mn')
+    return texto
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -461,7 +472,7 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 
-# Comando /editarficha - pede edição e processa respostas
+# ================== /editarficha ==================
 async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -471,68 +482,73 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not player:
         await update.message.reply_text("Use /start primeiro!")
         return
-    EDIT_PENDING[uid] = True
+
+    EDIT_PENDING[uid] = True  # marca que esse player está editando
     text = "✏️ Edite sua ficha respondendo apenas os valores que deseja alterar no formato:\n"
     text += "Força: 3\nDestreza: 4\n...\nPercepção: 5\n...\n\nLimites: atributos somam até 24, perícias até 42; cada campo entre 1–6."
     await update.message.reply_text(text)
 
 
+# ================== Recebe edição ==================
 async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in EDIT_PENDING:
-        # mesmo sem edição, aproveitamos para registrar username
+        # mesmo sem edição, registra username
         register_username(uid, update.effective_user.username, update.effective_user.first_name)
         return
 
-    text = update.message.text
     player = get_player(uid)
     if not player:
         await update.message.reply_text("Use /start primeiro!")
         return
 
-    # Copias para validação
-    novos_atrib = dict(player["atributos"]) 
-    novas_per = dict(player["pericias"]) 
+    text = update.message.text
+    EDIT_TEMP = player["atributos"].copy()
+    EDIT_TEMP.update(player["pericias"])  # mistura temporária atributos+perícias
 
-    for line in text.splitlines():
-        if ':' in line:
-            key, val = line.split(':', 1)
-            key = key.strip()
-            try:
-                val = int(val.strip())
-            except:
-                continue
-            if key in ATRIBUTOS_LISTA:
-                novos_atrib[key] = val
-            elif key in PERICIAS_LISTA:
-                novas_per[key] = val
+    linhas = text.split("\n")
+    for linha in linhas:
+        if not linha.strip():
+            continue
+        try:
+            key, val = linha.split(":")
+            key = normalizar(key)  # transforma em minúscula e remove acento
+            val = int(val.strip())
+        except:
+            await update.message.reply_text(f"❌ Formato inválido na linha: {linha}")
+            return
 
-    # Valida faixas
-    if any(v < 1 or v > 6 for v in novos_atrib.values()):
-        await update.message.reply_text("❌ Atributos devem estar entre 1 e 6.")
-        return
-    if any(v < 1 or v > 6 for v in novas_per.values()):
-        await update.message.reply_text("❌ Perícias devem estar entre 1 e 6.")
-        return
-    if sum(novos_atrib.values()) > MAX_ATRIBUTOS:
-        await update.message.reply_text(f"❌ Soma dos atributos excede {MAX_ATRIBUTOS}.")
-        return
-    if sum(novas_per.values()) > MAX_PERICIAS:
-        await update.message.reply_text(f"❌ Soma das perícias excede {MAX_PERICIAS}.")
-        return
+        if key in ATRIBUTOS_NORMAL:
+            key_real = ATRIBUTOS_NORMAL[key]
+            if val < 1 or val > 6:
+                await update.message.reply_text("❌ Atributos devem estar entre 1 e 6.")
+                return
+            soma_atributos = sum(EDIT_TEMP.get(a, 0) for a in ATRIBUTOS_LISTA if a != key_real) + val
+            if soma_atributos > MAX_ATRIBUTOS:
+                await update.message.reply_text("❌ Total de pontos de atributos excede 24.")
+                return
+            EDIT_TEMP[key_real] = val
 
-    # Persistir
-    for k, v in novos_atrib.items():
-        update_atributo(uid, k, v)
-    for k, v in novas_per.items():
-        update_pericia(uid, k, v)
+        elif key in PERICIAS_NORMAL:
+            key_real = PERICIAS_NORMAL[key]
+            if val < 1 or val > 6:
+                await update.message.reply_text("❌ Perícias devem estar entre 1 e 6.")
+                return
+            soma_pericias = sum(EDIT_TEMP.get(p, 0) for p in PERICIAS_LISTA if p != key_real) + val
+            if soma_pericias > MAX_PERICIAS:
+                await update.message.reply_text("❌ Total de pontos de perícias excede 42.")
+                return
+            EDIT_TEMP[key_real] = val
 
-    # Atualiza peso_max conforme Força
-    ensure_peso_max_by_forca(uid)
+        else:
+            await update.message.reply_text(f"❌ Campo não reconhecido: {key}")
+            return
 
+    # Salva alterações no jogador
+    player["atributos"] = {k: EDIT_TEMP[k] for k in ATRIBUTOS_LISTA}
+    player["pericias"] = {k: EDIT_TEMP[k] for k in PERICIAS_LISTA}
+    await update.message.reply_text("✅ Ficha atualizada com sucesso!")
     EDIT_PENDING.pop(uid, None)
-    await update.message.reply_text("✅ Ficha atualizada!")
-
 
 # /inventario (substitui /inv)
 async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
