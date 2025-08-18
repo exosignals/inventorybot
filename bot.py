@@ -884,25 +884,35 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not player or len(context.args) < 1:
         await update.message.reply_text("Uso: /roll nome_da_pericia_ou_atributo")
         return
+
     key = " ".join(context.args)
+    key_norm = normalizar(key)
+
     bonus = 0
     found = False
-    if key in player['atributos']:
-        bonus += player['atributos'][key]
+    real_key = key
+
+    if key_norm in ATRIBUTOS_NORMAL:
+        real_key = ATRIBUTOS_NORMAL[key_norm]
+        bonus += player['atributos'].get(real_key, 0)
         found = True
-    if key in player['pericias']:
-        bonus += player['pericias'][key]
+    elif key_norm in PERICIAS_NORMAL:
+        real_key = PERICIAS_NORMAL[key_norm]
+        bonus += player['pericias'].get(real_key, 0)
         found = True
-    if not found:
-        await update.message.reply_text("❌ Perícia/atributo não encontrado.")
+    else:
+        await update.message.reply_text(
+            "❌ Perícia/atributo não encontrado.\nVeja os nomes válidos em /ficha."
+        )
         return
 
     dados = roll_dados()
     total = sum(dados) + bonus
     res = resultado_roll(sum(dados))
     await update.message.reply_text(
-        f"🎲 /roll {key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}\nTotal: {total} → {res}")
-
+        f"🎲 /roll {real_key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}\nTotal: {total} → {res}"
+    )
+    
 async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
