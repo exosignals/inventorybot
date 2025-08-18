@@ -399,7 +399,7 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not player:
         await update.message.reply_text("Você precisa usar /start primeiro!")
         return
-    text = "\u200B\n\u200B 「  ཀ  𝗗𝗘𝗔𝗗𝗟𝗜𝗡𝗘, ficha.  」​\u200B\n\n ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  (20 Pontos)\n"
+    text = "\u200B\n 「  ཀ  𝗗𝗘𝗔𝗗𝗟𝗜𝗡𝗘, ficha.  」​\u200B\n\n ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  (20 Pontos)\n"
     for a in ATRIBUTOS_LISTA:
         val = player["atributos"].get(a, 0)
         text += f" — {a}﹕{val}\n"
@@ -410,8 +410,8 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += f"\n 𖹭  𝗛𝗣  ▸  {player['hp']}\n 𖦹  𝗦𝗣  ▸  {player['sp']}\n"
     total_peso = peso_total(player)
     sobre = "  ⚠︎  Você está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
-    text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕{total_peso:.1f}/{player['peso_max']}{sobre}\n\n"
-    text += "<i>Para editar Atributos e Perícias, utilize o comando /editarficha.</i>\n<i>Para gerenciar seu Inventário, utilize o comando /inventario.</i>\n\u200B"
+    text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f}/{player['peso_max']}{sobre}\n\n"
+    text += "<blockquote>Para editar Atributos e Perícias, utilize o comando /editarficha.</blockquote>\n<blockquote>Para gerenciar seu Inventário, utilize o comando /inventario.</blockquote>\n\u200B"
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -427,12 +427,14 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     EDIT_PENDING[uid] = True
     text = (
-        "\u200B\n✎... Para editar os pontos em sua ficha, responda em apenas uma mensagem todas as alterações que deseja realizar, com base no modelo à seguir ↴ \n\n"
-        "𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀:\n"
+        "\u200B\nPara editar os pontos em sua ficha, responda (em apenas uma mensagem) com todas as alterações que deseja realizar, com base no modelo à seguir: \n\n"
+        " ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  \n"
         "<code>Força: </code>\n<code>Destreza: </code>\n<code>Constituição: </code>\n<code>Inteligência: </code>\n<code>Sabedoria: </code>\n<code>Carisma: </code>\n\n"
-        "𝗣𝗲𝗿𝛊́𝗰𝗶𝗮𝘀:\n"
-        "<code>Percepção: 1-6</code>\n<code>Persuasão: 1-6</code>\n<code>Medicina: 1-6</code>\n<code>Furtividade: 1-6</code>\n<code>Intimidação: 1-6</code>\n<code>Investigação: 1-6</code>\n<code>Armas de fogo: 1-6</code>\n<code>Armas brancas: 1-6</code>\n<code>Sobrevivência: 1-6</code>\n<code>Cultura: 1-6</code>\n<code>Intuição: 1-6</code>\n<code>Tecnologia: 1-6</code>\n\n"
-        "  ⚠ <b>ATENÇÃO</b> \nCada Atributo e Perícia deve conter, sem exeção, entre 1 e 6 pontos.\nA soma de todos o pontos de Atributos deve totalizar 20\nA soma de todos o pontos de Perícia deve totalizar 40.\n\u200B"
+        " ✦︎  𝗣𝗲𝗿𝗶𝗰𝗶𝗮𝘀  \n"
+        "<code>Percepção: </code>\n<code>Persuasão: </code>\n<code>Medicina: </code>\n<code>Furtividade: </code>\n<code>Intimidação: </code>\n<code>Investigação: </code>\n<code>Armas de fogo: </code>\n<code>Armas brancas: </code>\n<code>Sobrevivência: </code>\n<code>Cultura: </code>\n<code>Intuição: </code>\n<code>Tecnologia: </code>\n\n"
+        " ⓘ <b>ATENÇÃO</b>\n<blockquote> ▸ Cada Atributo e Perícia deve conter, sem exceção, entre 1 e 6 pontos.</blockquote>\n"
+        "<blockquote> ▸ A soma de todos o pontos de Atributos deve totalizar 20</blockquote></>\n"
+        "<blockquote> ▸ A soma de todos o pontos de Perícia deve totalizar 40.</blockquote>\n\u200B"
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -460,7 +462,7 @@ async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
             key = normalizar(key)
             val = int(val.strip())
         except:
-            await update.message.reply_text(f"❌ Formato inválido na linha: {linha}")
+            await update.message.reply_text(f"❌ Remova esta parte: ({linha}) e envie novamente.")
             return
 
         if key in ATRIBUTOS_NORMAL:
@@ -532,7 +534,7 @@ async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not data:
         await update.message.reply_text("\u200B\n ☰  Catálogo\nVazio. Use /additem Nome Peso para adicionar.\n\u200B")
         return
-    lines = ["  ☰  Catálogo de Itens\n"]
+    lines = ["\u200B ☰  Catálogo de Itens\n"]
     for nome, peso in data:
         lines.append(f" — {nome} ({peso:.2f} kg)")
     await update.message.reply_text("\n".join(lines))
