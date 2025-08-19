@@ -1,3 +1,4 @@
+import logging
 import schedule
 import subprocess
 import psycopg2
