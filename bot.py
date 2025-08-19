@@ -326,7 +326,7 @@ def ensure_peso_max_by_forca(uid: int):
     row = c.fetchone()
     if row:
         valor_forca = max(1, min(6, int(row[0])))
-        novo = PESO_MAX.get(valor_forca, 15)
+        novo = PESO_MAX.get(valor_forca, 0)
         c.execute("UPDATE players SET peso_max=%s WHERE id=%s", (novo, uid))
         conn.commit()
     conn.close()
@@ -383,7 +383,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.username
     if not get_player(uid):
         create_player(uid, nome, username)
-    register_username(uid, username, nome)
+        register_username(uid, username, nome)
+        update_player_field(uid, 'hp_max', 40)
+        update_player_field(uid, 'sp_max', 40)
     await update.message.reply_text(
     f"\u200B\n 𐚁  𝗕𝗼𝗮𝘀 𝘃𝗶𝗻𝗱𝗮𝘀, {nome} ! \n\n"
     "Este bot gerencia seus Dados, Ficha, Inventário, Vida e Sanidade, além de diversos outros sistemas que você poderá explorar.\n\n"
@@ -412,7 +414,8 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for p in PERICIAS_LISTA:
         val = player["pericias"].get(p, 0)
         text += f" — {p}﹕{val}\n"
-    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']}\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']}\n"
+    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']}/{player['hp_max']}\n"
+    text += f" 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']}/{player['sp_max']}\n"
     total_peso = peso_total(player)
     sobre = "  ⚠︎  Você está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
     text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f}/{player['peso_max']}{sobre}\n\n"
@@ -933,7 +936,7 @@ async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     alvo = get_player(alvo_id)
     before = alvo['hp']
-    after = min(20, before + total)
+    after = min(alvo['hp_max'], before + total)
     update_player_field(alvo_id, 'hp', after)
 
     msg = (
@@ -971,7 +974,7 @@ async def terapia(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     alvo = get_player(alvo_id)
     before = alvo['sp']
-    after = min(20, before + total)
+    after = min(alvo['sp_max'], before + total)
     update_player_field(alvo_id, 'sp', after)
 
     msg = (
@@ -985,8 +988,9 @@ async def terapia(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def coma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
+
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
 
@@ -1003,22 +1007,26 @@ async def coma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bonus_ajuda = pop_coma_bonus(uid)
     total = soma + bonus_ajuda
 
+    # Definir resultado narrativo
     if total <= 5:
-        status = "☠️ Morte."
-    elif total <= 10:
-        status = "Ainda em coma."
-    elif total <= 15:
-        status = "Sinais de recuperação (permanece em coma, mas melhora)."
-    else:
-        status = "🌅 Você acorda! (HP passa a 1)"
+        status = "☠️ Morte súbita! O corpo não resistiu, e a escuridão se fechou."
+    elif total <= 12:
+        status = "💀 Continua em coma. O corpo permanece inconsciente, lutando por cada respiração."
+    elif total <= 19:
         update_player_field(uid, 'hp', 1)
+        status = "🌅 Você desperta, fraco e atordoado. HP agora: 1."
+    else:  # 20+
+        extra_hp = random.randint(2, 5)
+        new_hp = min(player['hp_max'], extra_hp)
+        update_player_field(uid, 'hp', new_hp)
+        status = f"🌟 Sucesso crítico! Um milagre: você acorda com {new_hp} HP, mais forte que antes!"
 
     await update.message.reply_text(
         "\n".join([
-            "🧊 Teste de Coma",
-            f"Rolagens: {dados} → {soma}",
+            "🧊 **Teste de Coma**",
+            f"Rolagens dos dados: {dados} → {soma}",
             f"Bônus de ajuda: +{bonus_ajuda}",
-            f"Total: {total}",
+            f"Total final: {total}",
             f"Resultado: {status}",
         ])
     )
