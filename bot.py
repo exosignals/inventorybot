@@ -1283,7 +1283,7 @@ async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_reroll=False, ignorar_anti_spam=False):
     uid = update.effective_user.id
 
-    # Bloqueio anti-spam (ignorado se for reroll ou ignorar_anti_spam=True)
+    # Anti-spam só para rolls normais
     if not ignorar_anti_spam and not anti_spam(uid):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
         return False
@@ -1291,13 +1291,17 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
     # Registro do usuário
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
 
-    # Validação do jogador e argumentos
+    # Pega ou cria jogador
     player = get_player(uid)
-    if not player or len(context.args) < 1:
+    if not player:
+        create_player(uid, update.effective_user.first_name, update.effective_user.username)
+        player = get_player(uid)
+
+    # Validação de argumentos
+    if len(context.args) < 1:
         await update.message.reply_text("Uso: /roll nome_da_pericia_ou_atributo")
         return False
 
-    # Normalização e identificação do atributo/perícia
     key = " ".join(context.args)
     key_norm = normalizar(key)
 
@@ -1314,12 +1318,11 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
         await update.message.reply_text("❌ Perícia/atributo não encontrado.\nVeja os nomes válidos em /ficha.")
         return False
 
-    # Rolagem e resultado
     dados = roll_dados()
     total = sum(dados) + bonus
     res = resultado_roll(sum(dados))
 
-    # Armazena última rolagem (não sobrescreve se for reroll)
+    # Armazena última rolagem
     if not consumir_reroll:
         last_roll[uid] = {
             "key": real_key,
@@ -1327,20 +1330,15 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
             "bonus": bonus
         }
 
-    # Mensagem final
     await update.message.reply_text(
         f"🎲 /roll {real_key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}\nTotal: {total} → {res}"
     )
     return True
 
+
 # ==================== REROLL ====================
 async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-
-    if not anti_spam(uid):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
-        return
-
     player = get_player(uid)
     if not player:
         await update.message.reply_text("Use /start primeiro!")
@@ -1350,16 +1348,16 @@ async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Você não tem rerolls disponíveis hoje!")
         return
 
-    # Verifica se existe última rolagem
     if uid not in last_roll:
         await update.message.reply_text("❌ Nenhuma rolagem anterior encontrada para refazer.")
         return
 
-    # Simula args para roll usando a última rolagem e ignora anti-spam
+    # Prepara args para o roll e ignora anti-spam
     context.args = [last_roll[uid]['key']]
     ok = await roll(update, context, consumir_reroll=True, ignorar_anti_spam=True)
 
     if ok:
+        # Decrementa rerolls somente se roll foi bem-sucedido
         update_player_field(uid, 'rerolls', player['rerolls'] - 1)
         await update.message.reply_text(f"🔄 Reroll usado! Rerolls restantes: {player['rerolls'] - 1}")
 
