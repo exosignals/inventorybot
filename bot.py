@@ -512,6 +512,56 @@ async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(" ✅ Ficha atualizada com sucesso!")
     EDIT_PENDING.pop(uid, None)
 
+async def verficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
+        return
+    
+    uid = update.effective_user.id
+    
+    # Verifica se é admin
+    if not is_admin(uid):
+        await update.message.reply_text("❌ Apenas administradores podem usar este comando.")
+        return
+    
+    if len(context.args) < 1:
+        await update.message.reply_text("Uso: /verficha @jogador")
+        return
+    
+    user_tag = context.args[0]
+    target_id = username_to_id(user_tag)
+    if not target_id:
+        await update.message.reply_text("❌ Jogador não encontrado. Peça para a pessoa usar /start pelo menos uma vez.")
+        return
+    
+    player = get_player(target_id)
+    if not player:
+        await update.message.reply_text("❌ Jogador não encontrado no sistema.")
+        return
+    
+    # Monta a ficha (mesmo formato do comando /ficha)
+    text = f"\u200B\n 「  ཀ  𝗗𝗘𝗔𝗗𝗟𝗜𝗡𝗘, ficha de {player['nome']}.  」​\u200B\n\n ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  (20 Pontos)\n"
+    for a in ATRIBUTOS_LISTA:
+        val = player["atributos"].get(a, 0)
+        text += f" — {a}﹕{val}\n"
+    text += "\n ✦︎  𝗣𝗲𝗿𝗶𝗰𝗶𝗮𝘀  (40 Pontos)\n"
+    for p in PERICIAS_LISTA:
+        val = player["pericias"].get(p, 0)
+        text += f" — {p}﹕{val}\n"
+    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']}\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']}\n"
+    
+    total_peso = peso_total(player)
+    sobre = "  ⚠︎  Jogador está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
+    text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f}/{player['peso_max']}{sobre}\n"
+    
+    # Adiciona informações extras para admin
+    text += f"\n📊 <b>Info Admin:</b>\n"
+    text += f" — ID: {player['id']}\n"
+    text += f" — Username: @{player['username'] or 'N/A'}\n"
+    text += f" — Rerolls: {player['rerolls']}/3\n\u200B"
+    
+    await update.message.reply_text(text, parse_mode="HTML")
+
 async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
@@ -922,6 +972,56 @@ async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"\n😵 Trauma severo! {trauma}"
         await update.message.reply_text(msg)
 
+async def autodano(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        return
+    
+    uid = update.effective_user.id
+    register_username(uid, update.effective_user.username, update.effective_user.first_name)
+
+    if len(context.args) < 1:
+        await update.message.reply_text("Uso: /autodano hp|sp")
+        return
+    
+    tipo = context.args[0].lower()
+    if tipo not in ("hp", "sp", "vida", "sanidade"):
+        await update.message.reply_text("Tipo inválido! Use hp/vida ou sp/sanidade.")
+        return
+
+    player = get_player(uid)
+    if not player:
+        await update.message.reply_text("Use /start primeiro!")
+        return
+
+    dado = random.randint(1, 6)
+    
+    if tipo in ("hp", "vida"):
+        before = player['hp']
+        after = max(0, before - dado)
+        update_player_field(uid, 'hp', after)
+        msg = (
+            f"🎲 {mention(update.effective_user)} se autoinfligiu dano!\n"
+            f"Rolagem: 1d6 → {dado}\n"
+            f"HP: {before} → {after}"
+        )
+        if after == 0:
+            msg += "\n💀 Você entrou em coma! Use /coma."
+        await update.message.reply_text(msg)
+    else:
+        before = player['sp']
+        after = max(0, before - dado)
+        update_player_field(uid, 'sp', after)
+        msg = (
+            f"🎲 {mention(update.effective_user)} se autoinfligiu dano mental!\n"
+            f"Rolagem: 1d6 → {dado}\n"
+            f"SP: {before} → {after}"
+        )
+        if after == 0:
+            trauma = random.choice(TRAUMAS)
+            msg += f"\n😵 Trauma severo! {trauma}"
+        await update.message.reply_text(msg)
+
 async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -980,6 +1080,70 @@ async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🏥 Bônus de Medicina: +{bonus_med}\n"
         f"Total: {total}\n\n"
         f"{alvo['nome']}: HP {before} → {after}"
+    )
+    await update.message.reply_text(msg)
+
+async def autocura(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not anti_spam(update.effective_user.id):
+        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        return
+    
+    uid = update.effective_user.id
+    register_username(uid, update.effective_user.username, update.effective_user.first_name)
+
+    if len(context.args) < 1:
+        await update.message.reply_text("Uso: /autocura NomeDoKit")
+        return
+
+    kit_nome = " ".join(context.args).strip()
+    key = kit_nome.lower()
+    bonus_kit = KIT_BONUS.get(key)
+    if bonus_kit is None:
+        await update.message.reply_text("❌ Kit inválido. Use: Kit Básico, Kit Intermediário ou Kit Avançado.")
+        return
+
+    player = get_player(uid)
+    if not player:
+        await update.message.reply_text("Use /start primeiro!")
+        return
+
+    # Verifica se tem o kit no inventário
+    cat = get_catalog_item(kit_nome)
+    inv_nome = cat['nome'] if cat else kit_nome
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT quantidade,peso FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, inv_nome))
+    row = c.fetchone()
+    if not row or row[0] <= 0:
+        await update.message.reply_text(f"❌ Você não possui '{kit_nome}' no inventário.")
+        conn.close()
+        return
+    
+    # Consome o kit
+    nova = row[0] - 1
+    if nova <= 0:
+        c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, inv_nome))
+    else:
+        c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, inv_nome))
+    conn.commit()
+    conn.close()
+
+    # Calcula a cura
+    dado = random.randint(1, 6)
+    bonus_med = player['pericias'].get('Medicina', 0)
+    total = dado + bonus_kit + bonus_med
+
+    before = player['hp']
+    after = min(player['hp_max'], before + total)
+    update_player_field(uid, 'hp', after)
+
+    msg = (
+        f"🎲 {mention(update.effective_user)} se autocurou usando {kit_nome}!\n"
+        f"Rolagem: 1d6 → {dado}\n"
+        f"💊 Kit usado: {kit_nome} (+{bonus_kit})\n"
+        f"🏥 Bônus de Medicina: +{bonus_med}\n"
+        f"Total: {total}\n\n"
+        f"HP: {before} → {after}"
     )
     await update.message.reply_text(msg)
 
@@ -1195,6 +1359,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ficha", ficha))
+    app.add_handler(CommandHandler("verficha", verficha))
     app.add_handler(CommandHandler("inventario", inventario))
     app.add_handler(CommandHandler("itens", itens))
     app.add_handler(CommandHandler("additem", additem))
@@ -1204,7 +1369,9 @@ def main():
     app.add_handler(CommandHandler("abandonar", abandonar))
     app.add_handler(CallbackQueryHandler(callback_abandonar))
     app.add_handler(CommandHandler("dano", dano))
+    app.add_handler(CommandHandler("autodano", autodano))
     app.add_handler(CommandHandler("cura", cura))
+    app.add_handler(CommandHandler("autocura", autocura))
     app.add_handler(CommandHandler("terapia", terapia))
     app.add_handler(CommandHandler("coma", coma))
     app.add_handler(CommandHandler("ajudar", ajudar))
