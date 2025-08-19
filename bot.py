@@ -1,6 +1,8 @@
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackQueryHandler
 import psycopg2
 import psycopg2.extras
 import os
@@ -36,6 +38,11 @@ ATRIBUTOS_NORMAL = {normalizar(a): a for a in ATRIBUTOS_LISTA}
 PERICIAS_NORMAL = {normalizar(p): p for p in PERICIAS_LISTA}
 
 EDIT_PENDING = {}
+
+# Dicionário temporário para armazenar transferências pendentes
+TRANSFER_PENDING = {}
+
+ABANDON_PENDING = {}    # para /abandonar
 
 KIT_BONUS = {
     "kit basico": 1,
@@ -113,8 +120,6 @@ def init_db():
                     target_id BIGINT PRIMARY KEY,
                     bonus INTEGER DEFAULT 0
                 )''')
-    conn.commit()
-    c.execute("UPDATE players SET rerolls=3")
     conn.commit()
     conn.close()
 
@@ -578,68 +583,252 @@ async def delitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Item não encontrado no catálogo.")
 
 async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Anti-spam
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
+
     if len(context.args) < 2:
-        await update.message.reply_text("Uso: /dar @jogador Nome do item (exatamente como está no seu inventário) xquantidade (opcional)")
+        await update.message.reply_text(
+            "Uso: /dar @jogador Nome do item xquantidade (opcional)"
+        )
         return
+
     uid_from = update.effective_user.id
     register_username(uid_from, update.effective_user.username, update.effective_user.first_name)
+
     user_tag = context.args[0]
     target_id = username_to_id(user_tag)
     if not target_id:
         await update.message.reply_text("❌ Jogador não encontrado. Peça para a pessoa usar /start pelo menos uma vez.")
         return
 
+    # Parse do item e quantidade
     qtd = 1
     tail = context.args[1:]
     if len(tail) >= 2 and tail[-2].lower() == 'x' and tail[-1].isdigit():
         qtd = int(tail[-1])
-        item_nome = " ".join(tail[:-2])
+        item_input = " ".join(tail[:-2])
     elif len(tail) >= 1 and tail[-1].isdigit():
         qtd = int(tail[-1])
-        item_nome = " ".join(tail[:-1])
+        item_input = " ".join(tail[:-1])
     else:
-        item_nome = " ".join(tail)
+        item_input = " ".join(tail)
 
     if qtd < 1:
         await update.message.reply_text("❌ Quantidade inválida.")
         return
 
-    cat = get_catalog_item(item_nome)
-    if not cat:
-        await update.message.reply_text("❌ Item não está no catálogo. Use /itens para ver os disponíveis.")
-        return
-
-    target = get_player(target_id)
-    if not target:
-        await update.message.reply_text("❌ O alvo ainda não iniciou o bot (/start).")
-        return
-
-    peso_add = cat['peso'] * qtd
-    total_depois = peso_total(target) + peso_add
-    if total_depois > target['peso_max']:
-        excesso = total_depois - target['peso_max']
-        await update.message.reply_text(
-            f"⚠️ {target['nome']} sofreria uma sobrecarga de {excesso:.1f} kg. Item não foi adicionado.")
-        return
-
+    # Busca item no inventário do doador (case-insensitive)
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND nome=%s", (target_id, cat['nome']))
+    c.execute(
+        "SELECT nome, peso, quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+        (uid_from, item_input)
+    )
     row = c.fetchone()
-    if row:
-        nova = row[0] + qtd
-        c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND nome=%s", (nova, target_id, cat['nome']))
-    else:
-        c.execute("INSERT INTO inventario(player_id,nome,peso,quantidade) VALUES(%s,%s,%s,%s)",
-                  (target_id, cat['nome'], cat['peso'], qtd))
-    conn.commit()
+    if not row:
+        conn.close()
+        await update.message.reply_text(f"❌ Você não possui '{item_input}' no seu inventário.")
+        return
+
+    item_nome_doador, item_peso, qtd_doador = row
+    if qtd > qtd_doador:
+        conn.close()
+        await update.message.reply_text(f"❌ Quantidade indisponível. Você tem {qtd_doador}x '{item_nome_doador}'.")
+        return
+
+    # Checa sobrecarga do alvo
+    target_before = get_player(target_id)
+    peso_add = item_peso * qtd
+    total_depois_target = peso_total(target_before) + peso_add
+    if total_depois_target > target_before['peso_max']:
+        conn.close()
+        excesso = total_depois_target - target_before['peso_max']
+        await update.message.reply_text(
+            f"⚠️ {target_before['nome']} ficaria com sobrecarga de {excesso:.1f} kg. Transferência cancelada."
+        )
+        return
     conn.close()
 
+    # Salva transferência pendente
+    TRANSFER_PENDING[update.effective_user.id] = {
+        "item": item_nome_doador,
+        "qtd": qtd,
+        "doador": uid_from,
+        "alvo": target_id
+    }
+
+    # Inline keyboard de confirmação
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Confirmar", callback_data="confirm_dar"),
+            InlineKeyboardButton("❌ Cancelar", callback_data="cancel_dar")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        f"✅ Entregue: {cat['nome']} x{qtd} para {user_tag}. Peso total agora: {total_depois:.1f}/{target['peso_max']} kg.")
+        f"{user_tag}, {update.effective_user.first_name} quer te dar {item_nome_doador} x{qtd}.\n"
+        "Aceita a transferência?",
+        reply_markup=reply_markup
+    )
+
+# Callback para confirmação/cancelamento
+async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    # Confirmação
+    if query.data == "confirm_dar":
+        # Busca transferência pendente onde o alvo é o user_id
+        transfer = None
+        for k, v in TRANSFER_PENDING.items():
+            if v['alvo'] == user_id:
+                transfer = v
+                break
+        if not transfer:
+            await query.edit_message_text("❌ Nenhuma transferência pendente.")
+            return
+
+        doador = transfer['doador']
+        alvo = transfer['alvo']
+        item = transfer['item']
+        qtd = transfer['qtd']
+
+        # Transação completa
+        conn = get_conn()
+        c = conn.cursor()
+        try:
+            # Debita do doador
+            c.execute("SELECT quantidade, peso FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (doador, item))
+            row = c.fetchone()
+            if not row:
+                conn.close()
+                await query.edit_message_text("❌ O doador não tem mais o item.")
+                TRANSFER_PENDING.pop(doador)
+                return
+            qtd_doador, peso_item = row
+            nova_qtd_doador = qtd_doador - qtd
+            if nova_qtd_doador <= 0:
+                c.execute("DELETE FROM inventario WHERE player_id=%s AND nome=%s", (doador, item))
+            else:
+                c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND nome=%s", (nova_qtd_doador, doador, item))
+
+            # Credita no alvo
+            c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (alvo, item))
+            row_tgt = c.fetchone()
+            if row_tgt:
+                nova_qtd_tgt = row_tgt[0] + qtd
+                c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND nome=%s", (nova_qtd_tgt, alvo, item))
+            else:
+                c.execute("INSERT INTO inventario(player_id, nome, peso, quantidade) VALUES(%s,%s,%s,%s)", (alvo, item, peso_item, qtd))
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            conn.close()
+            await query.edit_message_text("❌ Ocorreu um erro ao transferir o item.")
+            TRANSFER_PENDING.pop(doador)
+            return
+        finally:
+            conn.close()
+
+        TRANSFER_PENDING.pop(doador)
+
+        # Recarrega pesos para mostrar detalhes
+        giver_after = get_player(doador)
+        target_after = get_player(alvo)
+        total_giver = peso_total(giver_after)
+        total_target = peso_total(target_after)
+
+        await query.edit_message_text(
+            f"✅ Transferência confirmada! {item} x{qtd} entregue.\n"
+            f"📦 {giver_after['nome']}: {total_giver:.1f}/{giver_after['peso_max']} kg\n"
+            f"📦 {target_after['nome']}: {total_target:.1f}/{target_after['peso_max']} kg"
+        )
+
+    # Cancelamento
+    elif query.data == "cancel_dar":
+        # Remove transferência pendente
+        to_remove = None
+        for k, v in TRANSFER_PENDING.items():
+            if v['alvo'] == user_id:
+                to_remove = k
+                break
+        if to_remove:
+            TRANSFER_PENDING.pop(to_remove)
+        await query.edit_message_text("❌ Transferência cancelada pelo jogador.")
+
+async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 1:
+        await update.message.reply_text("Uso: /abandonar Nome do item")
+        return
+
+    uid = update.effective_user.id
+    item_input = " ".join(context.args)
+
+    # Conecta ao banco
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT nome, peso, quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+        (uid, item_input.lower())
+    )
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        await update.message.reply_text(f"❌ Você não possui '{item_input}' no seu inventário.")
+        return
+
+    item_nome, item_peso, qtd = row
+    conn.close()
+
+    # Cria teclado de confirmação
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_abandonar:{uid}:{item_nome}"),
+            InlineKeyboardButton("❌ Cancelar", callback_data="cancel")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        f"⚠️ Você está prestes a abandonar '{item_nome}' x{qtd}. Confirma?",
+        reply_markup=reply_markup
+    )
+
+# ================= CALLBACK PARA CONFIRMAÇÃO =================
+async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data.startswith("confirm_abandonar:"):
+        _, uid_str, item_nome = data.split(":")
+        uid = int(uid_str)
+
+        conn = get_conn()
+        c = conn.cursor()
+        # Deleta o item do inventário
+        c.execute(
+            "DELETE FROM inventario WHERE player_id=%s AND nome=%s",
+            (uid, item_nome)
+        )
+        conn.commit()
+        conn.close()
+
+        # Atualiza o peso do inventário
+        jogador = get_player(uid)
+        total_peso = peso_total(jogador)
+
+        await query.edit_message_text(
+            f"✅ '{item_nome}' foi abandonado.\n"
+            f"📦 Inventário agora: {total_peso:.1f}/{jogador['peso_max']} kg"
+        )
+
+    elif data == "cancel":
+        await query.edit_message_text("❌ Ação cancelada.")
 
 async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
@@ -884,17 +1073,19 @@ async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🤝 {mention(update.effective_user)} usou {kit_nome} em {alvo_tag}!\nBônus aplicado ao próximo teste de coma: +{bonus}.")
 
-async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ==================== ROLL ====================
+async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_reroll=False):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
-        return
+        return False  # rolagem inválida
+
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
 
     player = get_player(uid)
     if not player or len(context.args) < 1:
         await update.message.reply_text("Uso: /roll nome_da_pericia_ou_atributo")
-        return
+        return False  # rolagem inválida
 
     key = " ".join(context.args)
     key_norm = normalizar(key)
@@ -915,7 +1106,7 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ Perícia/atributo não encontrado.\nVeja os nomes válidos em /ficha."
         )
-        return
+        return False  # rolagem inválida
 
     dados = roll_dados()
     total = sum(dados) + bonus
@@ -923,7 +1114,9 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🎲 /roll {real_key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}\nTotal: {total} → {res}"
     )
-    
+    return True  # rolagem válida
+
+# ==================== REROLL ====================
 async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -936,8 +1129,12 @@ async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if player['rerolls'] <= 0:
         await update.message.reply_text("Você não tem rerolls disponíveis hoje!")
         return
-    update_player_field(uid, 'rerolls', player['rerolls'] - 1)
-    await roll(update, context)
+
+    # Só consome reroll se a rolagem for válida
+    ok = await roll(update, context, consumir_reroll=True)
+    if ok:
+        update_player_field(uid, 'rerolls', player['rerolls'] - 1)
+
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
@@ -962,6 +1159,9 @@ def main():
     app.add_handler(CommandHandler("additem", additem))
     app.add_handler(CommandHandler("delitem", delitem))
     app.add_handler(CommandHandler("dar", dar))
+    app.add_handler(CallbackQueryHandler(transfer_callback))
+    app.add_handler(CommandHandler("abandonar", abandonar))
+    app.add_handler(CallbackQueryHandler(callback_abandonar))
     app.add_handler(CommandHandler("dano", dano))
     app.add_handler(CommandHandler("cura", cura))
     app.add_handler(CommandHandler("terapia", terapia))
