@@ -1280,61 +1280,47 @@ async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🤝 {mention(update.effective_user)} usou {kit_nome} em {alvo_tag}!\nBônus aplicado ao próximo teste de coma: +{bonus}.")
 
 # ==================== ROLL ====================
-async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_reroll=False, ignorar_anti_spam=False):
-    uid = update.effective_user.id
-
-    # Anti-spam só para rolls normais
-    if not ignorar_anti_spam and not anti_spam(uid):
+async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_reroll=False):
+    if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
-        return False
+        return False  # rolagem inválida
 
-    # Registro do usuário
+    uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
 
-    # Pega ou cria jogador
     player = get_player(uid)
-    if not player:
-        create_player(uid, update.effective_user.first_name, update.effective_user.username)
-        player = get_player(uid)
-
-    # Validação de argumentos
-    if len(context.args) < 1:
+    if not player or len(context.args) < 1:
         await update.message.reply_text("Uso: /roll nome_da_pericia_ou_atributo")
-        return False
+        return False  # rolagem inválida
 
     key = " ".join(context.args)
     key_norm = normalizar(key)
 
     bonus = 0
+    found = False
     real_key = key
 
     if key_norm in ATRIBUTOS_NORMAL:
         real_key = ATRIBUTOS_NORMAL[key_norm]
         bonus += player['atributos'].get(real_key, 0)
+        found = True
     elif key_norm in PERICIAS_NORMAL:
         real_key = PERICIAS_NORMAL[key_norm]
         bonus += player['pericias'].get(real_key, 0)
+        found = True
     else:
-        await update.message.reply_text("❌ Perícia/atributo não encontrado.\nVeja os nomes válidos em /ficha.")
-        return False
+        await update.message.reply_text(
+            "❌ Perícia/atributo não encontrado.\nVeja os nomes válidos em /ficha."
+        )
+        return False  # rolagem inválida
 
     dados = roll_dados()
     total = sum(dados) + bonus
     res = resultado_roll(sum(dados))
-
-    # Armazena última rolagem
-    if not consumir_reroll:
-        last_roll[uid] = {
-            "key": real_key,
-            "tipo": "atributo" if key_norm in ATRIBUTOS_NORMAL else "pericia",
-            "bonus": bonus
-        }
-
     await update.message.reply_text(
         f"🎲 /roll {real_key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}\nTotal: {total} → {res}"
     )
-    return True
-
+    return True  # rolagem válida
 
 # ==================== REROLL ====================
 async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
