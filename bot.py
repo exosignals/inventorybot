@@ -1143,6 +1143,26 @@ async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ok:
         update_player_field(uid, 'rerolls', player['rerolls'] - 1)
 
+# ----------------------- Ficha de outro jogador (admin) -----------------------
+async def ficha_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Permite que admins vejam a ficha de outro jogador sem pedir."""
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("❌ Apenas administradores podem usar este comando.")
+        return
+
+    if len(context.args) < 1:
+        await update.message.reply_text("Uso: /ficha @jogador")
+        return
+
+    jogador_tag = context.args[0]
+    jogador_id = username_to_id(jogador_tag)
+    if not jogador_id:
+        await update.message.reply_text("❌ Jogador não encontrado.")
+        return
+
+    ficha = montar_ficha(jogador_id)  # sua função existente que monta a ficha
+    await update.message.reply_text(ficha)
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
