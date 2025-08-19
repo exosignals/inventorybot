@@ -1295,6 +1295,11 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
         return False  # rolagem inválida
 
     args_text = " ".join(context.args).strip()
+
+    # Salva última rolagem do jogador
+    player['ultima_rolagem'] = args_text
+    update_player_field(uid, 'ultima_rolagem', args_text)
+
     pattern = r"(?P<qtd>\d+)d(?P<lados>4|6|8|10|12|20|100)(?:\s+(?P<mod>[\+\-]?\d+|[a-zA-Z\s]+))?$"
     match = re.match(pattern, args_text, re.I)
 
@@ -1368,24 +1373,30 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
 
     return True  # rolagem válida
 
+
 # ==================== REROLL ====================
 async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
         return
+
     uid = update.effective_user.id
     player = get_player(uid)
     if not player:
         await update.message.reply_text("Use /start primeiro!")
         return
+
     if player['rerolls'] <= 0:
         await update.message.reply_text("Você não tem rerolls disponíveis hoje!")
         return
 
-    # Só consome reroll se a rolagem for válida
+    if 'ultima_rolagem' not in player or not player['ultima_rolagem']:
+        await update.message.reply_text("❌ Nenhuma rolagem anterior encontrada para rerollar.")
+        return
+
+    # Recria context.args com a última rolagem
+    context.args = player['ultima_rolagem'].split()
     ok = await roll(update, context, consumir_reroll=True)
-    if ok:
-        update_player_field(uid, 'rerolls', player['rerolls'] - 1)
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
