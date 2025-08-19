@@ -164,7 +164,9 @@ def get_player(uid):
         "username": row["username"],
         "peso_max": row["peso_max"],
         "hp": row["hp"],
+        "hp_max": 40,   # DEFAULT
         "sp": row["sp"],
+        "sp_max": 40,   # DEFAULT
         "rerolls": row["rerolls"],
         "atributos": {},
         "pericias": {},
@@ -591,9 +593,7 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) < 2:
-        await update.message.reply_text(
-            "Uso: /dar @jogador Nome do item xquantidade (opcional)"
-        )
+        await update.message.reply_text("Uso: /dar @jogador Nome do item xquantidade (opcional)")
         return
 
     uid_from = update.effective_user.id
@@ -621,7 +621,7 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Quantidade inválida.")
         return
 
-    # Busca item no inventário do doador (case-insensitive)
+    # Checa item no inventário
     conn = get_conn()
     c = conn.cursor()
     c.execute(
@@ -629,39 +629,46 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         (uid_from, item_input)
     )
     row = c.fetchone()
-    if not row:
-        conn.close()
-        await update.message.reply_text(f"❌ Você não possui '{item_input}' no seu inventário.")
-        return
 
-    item_nome_doador, item_peso, qtd_doador = row
-    if qtd > qtd_doador:
-        conn.close()
-        await update.message.reply_text(f"❌ Quantidade indisponível. Você tem {qtd_doador}x '{item_nome_doador}'.")
-        return
+    if row:
+        item_nome, item_peso, qtd_doador = row
+        if qtd > qtd_doador:
+            conn.close()
+            await update.message.reply_text(f"❌ Quantidade indisponível. Você tem {qtd_doador}x '{item_nome}'.")
+            return
+    else:
+        if is_admin(uid_from):
+            item_info = get_catalog_item(item_input)
+            if not item_info:
+                conn.close()
+                await update.message.reply_text(f"❌ Item '{item_input}' não encontrado no catálogo.")
+                return
+            item_nome = item_info["nome"]
+            item_peso = item_info["peso"]
+        else:
+            conn.close()
+            await update.message.reply_text(f"❌ Você não possui '{item_input}' no seu inventário.")
+            return
+    conn.close()
 
     # Checa sobrecarga do alvo
     target_before = get_player(target_id)
-    peso_add = item_peso * qtd
-    total_depois_target = peso_total(target_before) + peso_add
+    total_depois_target = peso_total(target_before) + item_peso * qtd
     if total_depois_target > target_before['peso_max']:
-        conn.close()
         excesso = total_depois_target - target_before['peso_max']
         await update.message.reply_text(
             f"⚠️ {target_before['nome']} ficaria com sobrecarga de {excesso:.1f} kg. Transferência cancelada."
         )
         return
-    conn.close()
 
     # Salva transferência pendente
-    TRANSFER_PENDING[update.effective_user.id] = {
-        "item": item_nome_doador,
+    TRANSFER_PENDING[uid_from] = {
+        "item": item_nome,
         "qtd": qtd,
         "doador": uid_from,
         "alvo": target_id
     }
 
-    # Inline keyboard de confirmação
     keyboard = [
         [
             InlineKeyboardButton("✅ Confirmar", callback_data="confirm_dar"),
@@ -670,7 +677,7 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        f"{user_tag}, {update.effective_user.first_name} quer te dar {item_nome_doador} x{qtd}.\n"
+        f"{user_tag}, {update.effective_user.first_name} quer te dar {item_nome} x{qtd}.\n"
         "Aceita a transferência?",
         reply_markup=reply_markup
     )
@@ -698,33 +705,62 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         item = transfer['item']
         qtd = transfer['qtd']
 
-        # Transação completa
         conn = get_conn()
         c = conn.cursor()
         try:
-            # Debita do doador
-            c.execute("SELECT quantidade, peso FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (doador, item))
+            # Debita do doador, se ele tiver o item no inventário
+            c.execute(
+                "SELECT quantidade, peso FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                (doador, item)
+            )
             row = c.fetchone()
-            if not row:
-                conn.close()
-                await query.edit_message_text("❌ O doador não tem mais o item.")
-                TRANSFER_PENDING.pop(doador)
-                return
-            qtd_doador, peso_item = row
-            nova_qtd_doador = qtd_doador - qtd
-            if nova_qtd_doador <= 0:
-                c.execute("DELETE FROM inventario WHERE player_id=%s AND nome=%s", (doador, item))
+
+            if row:
+                qtd_doador, peso_item = row
+                nova_qtd_doador = qtd_doador - qtd
+                if nova_qtd_doador <= 0:
+                    c.execute(
+                        "DELETE FROM inventario WHERE player_id=%s AND nome=%s",
+                        (doador, item)
+                    )
+                else:
+                    c.execute(
+                        "UPDATE inventario SET quantidade=%s WHERE player_id=%s AND nome=%s",
+                        (nova_qtd_doador, doador, item)
+                    )
             else:
-                c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND nome=%s", (nova_qtd_doador, doador, item))
+                # Se o doador é admin e não tem o item, pega do catálogo
+                if is_admin(doador):
+                    item_info = get_catalog_item(item)
+                    if not item_info:
+                        conn.close()
+                        await query.edit_message_text("❌ Item não encontrado no catálogo.")
+                        TRANSFER_PENDING.pop(doador)
+                        return
+                    peso_item = item_info["peso"]
+                else:
+                    conn.close()
+                    await query.edit_message_text("❌ O doador não tem mais o item.")
+                    TRANSFER_PENDING.pop(doador)
+                    return
 
             # Credita no alvo
-            c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (alvo, item))
+            c.execute(
+                "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                (alvo, item)
+            )
             row_tgt = c.fetchone()
             if row_tgt:
                 nova_qtd_tgt = row_tgt[0] + qtd
-                c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND nome=%s", (nova_qtd_tgt, alvo, item))
+                c.execute(
+                    "UPDATE inventario SET quantidade=%s WHERE player_id=%s AND nome=%s",
+                    (nova_qtd_tgt, alvo, item)
+                )
             else:
-                c.execute("INSERT INTO inventario(player_id, nome, peso, quantidade) VALUES(%s,%s,%s,%s)", (alvo, item, peso_item, qtd))
+                c.execute(
+                    "INSERT INTO inventario(player_id, nome, peso, quantidade) VALUES(%s,%s,%s,%s)",
+                    (alvo, item, peso_item, qtd)
+                )
 
             conn.commit()
         except Exception:
@@ -752,7 +788,6 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Cancelamento
     elif query.data == "cancel_dar":
-        # Remove transferência pendente
         to_remove = None
         for k, v in TRANSFER_PENDING.items():
             if v['alvo'] == user_id:
