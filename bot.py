@@ -1373,7 +1373,6 @@ async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
         return
-
     uid = update.effective_user.id
     player = get_player(uid)
     if not player:
@@ -1383,8 +1382,10 @@ async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Você não tem rerolls disponíveis hoje!")
         return
 
-    # Chama roll e consome reroll apenas se a rolagem for válida
-    await roll(update, context, consumir_reroll=True)
+    # Só consome reroll se a rolagem for válida
+    ok = await roll(update, context, consumir_reroll=True)
+    if ok:
+        update_player_field(uid, 'rerolls', player['rerolls'] - 1)
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
