@@ -414,8 +414,7 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for p in PERICIAS_LISTA:
         val = player["pericias"].get(p, 0)
         text += f" — {p}﹕{val}\n"
-    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']}/{player['hp_max']}\n"
-    text += f" 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']}/{player['sp_max']}\n"
+    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']}\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']}\n"
     total_peso = peso_total(player)
     sobre = "  ⚠︎  Você está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
     text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f}/{player['peso_max']}{sobre}\n\n"
