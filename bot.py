@@ -1286,117 +1286,60 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
         return False  # rolagem inválida
 
     uid = update.effective_user.id
-    username = update.effective_user.username or update.effective_user.first_name
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
 
     player = get_player(uid)
     if not player or len(context.args) < 1:
-        await update.message.reply_text("Uso: /roll <XdY> [+Z ou atributo/perícia]")
+        await update.message.reply_text("Uso: /roll nome_da_pericia_ou_atributo")
         return False  # rolagem inválida
 
-    args_text = " ".join(context.args).strip()
-
-    # Salva última rolagem do jogador
-    player['ultima_rolagem'] = args_text
-    update_player_field(uid, 'ultima_rolagem', args_text)
-
-    pattern = r"(?P<qtd>\d+)d(?P<lados>4|6|8|10|12|20|100)(?:\s+(?P<mod>[\+\-]?\d+|[a-zA-Z\s]+))?$"
-    match = re.match(pattern, args_text, re.I)
+    key = " ".join(context.args)
+    key_norm = normalizar(key)
 
     bonus = 0
-    real_key = args_text
+    found = False
+    real_key = key
 
-    if not match:
-        # Rolar atributo/perícia puro
-        key_norm = normalizar(args_text)
-        if key_norm in ATRIBUTOS_NORMAL:
-            real_key = ATRIBUTOS_NORMAL[key_norm]
-            bonus += player['atributos'].get(real_key, 0)
-        elif key_norm in PERICIAS_NORMAL:
-            real_key = PERICIAS_NORMAL[key_norm]
-            bonus += player['pericias'].get(real_key, 0)
-        else:
-            await update.message.reply_text("❌ Perícia/atributo não encontrado.\nVeja os nomes válidos em /ficha.")
-            return False
-        resultados = roll_dados()
+    if key_norm in ATRIBUTOS_NORMAL:
+        real_key = ATRIBUTOS_NORMAL[key_norm]
+        bonus += player['atributos'].get(real_key, 0)
+        found = True
+    elif key_norm in PERICIAS_NORMAL:
+        real_key = PERICIAS_NORMAL[key_norm]
+        bonus += player['pericias'].get(real_key, 0)
+        found = True
     else:
-        qtd = int(match.group("qtd"))
-        lados = int(match.group("lados"))
-        mod = match.group("mod")
+        await update.message.reply_text(
+            "❌ Perícia/atributo não encontrado.\nVeja os nomes válidos em /ficha."
+        )
+        return False  # rolagem inválida
 
-        if lados == 100 and qtd != 1:
-            await update.message.reply_text("❌ Só é permitido 1 dado de 100 lados (1d100).")
-            return False
-        if lados != 100 and qtd > 4:
-            await update.message.reply_text("❌ Máximo de 4 dados para este tipo.")
-            return False
-
-        real_key = f"{qtd}d{lados}"
-
-        if mod:
-            mod = mod.strip()
-            if re.match(r"^[\+\-]?\d+$", mod):
-                bonus = int(mod)
-                if bonus < -6 or bonus > 6:
-                    await update.message.reply_text("❌ Modificador permitido entre -6 e +6.")
-                    return False
-                real_key += f" {bonus:+}"
-            else:
-                mod_norm = normalizar(mod)
-                if mod_norm in ATRIBUTOS_NORMAL:
-                    bonus = player['atributos'].get(ATRIBUTOS_NORMAL[mod_norm], 0)
-                    real_key += f" {ATRIBUTOS_NORMAL[mod_norm]}"
-                elif mod_norm in PERICIAS_NORMAL:
-                    bonus = player['pericias'].get(PERICIAS_NORMAL[mod_norm], 0)
-                    real_key += f" {PERICIAS_NORMAL[mod_norm]}"
-                else:
-                    await update.message.reply_text("❌ Atributo ou perícia não encontrado na ficha.")
-                    return False
-
-        resultados = [random.randint(1, lados) for _ in range(qtd)]
-
-    total = sum(resultados) + bonus
-    res = resultado_roll(total)  # ✅ agora considera bônus no crítico/falha
-    rolagem_str = " + ".join(str(r) for r in resultados) + f" → {sum(resultados)}"
-    bonus_str = f"{bonus:+}" if bonus != 0 else "0"
-
+    dados = roll_dados()
+    total = sum(dados) + bonus
+    res = resultado_roll(sum(dados))
     await update.message.reply_text(
-        f"🎲 {username} rolou /roll {real_key}\n"
-        f"Rolagens: {rolagem_str}\n"
-        f"Bônus: {bonus_str}\n"
-        f"Total: {total} → {res}"
+        f"🎲 /roll {real_key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}\nTotal: {total} → {res}"
     )
-
-    # Consome reroll apenas se solicitado e rolagem válida
-    if consumir_reroll and player['rerolls'] > 0:
-        update_player_field(uid, 'rerolls', player['rerolls'] - 1)
-
     return True  # rolagem válida
-
 
 # ==================== REROLL ====================
 async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
         return
-
     uid = update.effective_user.id
     player = get_player(uid)
     if not player:
         await update.message.reply_text("Use /start primeiro!")
         return
-
     if player['rerolls'] <= 0:
         await update.message.reply_text("Você não tem rerolls disponíveis hoje!")
         return
 
-    if 'ultima_rolagem' not in player or not player['ultima_rolagem']:
-        await update.message.reply_text("❌ Nenhuma rolagem anterior encontrada para rerollar.")
-        return
-
-    # Recria context.args com a última rolagem
-    context.args = player['ultima_rolagem'].split()
+    # Só consome reroll se a rolagem for válida
     ok = await roll(update, context, consumir_reroll=True)
+    if ok:
+        update_player_field(uid, 'rerolls', player['rerolls'] - 1)
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
