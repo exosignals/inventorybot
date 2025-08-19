@@ -1283,15 +1283,16 @@ async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_reroll=False):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
-        return False
+        return False  # rolagem inválida
 
     uid = update.effective_user.id
     username = update.effective_user.username or update.effective_user.first_name
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
+
     player = get_player(uid)
     if not player or len(context.args) < 1:
         await update.message.reply_text("Uso: /roll <XdY> [+Z ou atributo/perícia]")
-        return False
+        return False  # rolagem inválida
 
     args_text = " ".join(context.args).strip()
     pattern = r"(?P<qtd>\d+)d(?P<lados>4|6|8|10|12|20|100)(?:\s+(?P<mod>[\+\-]?\d+|[a-zA-Z\s]+))?$"
@@ -1301,7 +1302,7 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
     real_key = args_text
 
     if not match:
-        # Tenta rolar atributo/perícia puro
+        # Rolar atributo/perícia puro
         key_norm = normalizar(args_text)
         if key_norm in ATRIBUTOS_NORMAL:
             real_key = ATRIBUTOS_NORMAL[key_norm]
@@ -1350,11 +1351,10 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
         resultados = [random.randint(1, lados) for _ in range(qtd)]
 
     total = sum(resultados) + bonus
-    res = resultado_roll(sum(resultados))  # crítico/falha baseado só na soma dos dados
+    res = resultado_roll(total)  # ✅ agora considera bônus no crítico/falha
     rolagem_str = " + ".join(str(r) for r in resultados) + f" → {sum(resultados)}"
     bonus_str = f"{bonus:+}" if bonus != 0 else "0"
 
-    # Mensagem com nome de quem rolou
     await update.message.reply_text(
         f"🎲 {username} rolou /roll {real_key}\n"
         f"Rolagens: {rolagem_str}\n"
@@ -1366,13 +1366,14 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
     if consumir_reroll and player['rerolls'] > 0:
         update_player_field(uid, 'rerolls', player['rerolls'] - 1)
 
-    return True
+    return True  # rolagem válida
 
 # ==================== REROLL ====================
 async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
         return
+
     uid = update.effective_user.id
     player = get_player(uid)
     if not player:
@@ -1382,6 +1383,7 @@ async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Você não tem rerolls disponíveis hoje!")
         return
 
+    # Chama roll e consome reroll apenas se a rolagem for válida
     await roll(update, context, consumir_reroll=True)
 
 # ================== FLASK ==================
