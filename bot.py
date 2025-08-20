@@ -59,6 +59,11 @@ KIT_BONUS = {
     "avançado": 3,
 }
 
+CONSUMIVEIS = [
+    "comida enlatada", "água", "garrafa d'água", "ração", "barrinha", "barra de cereal"
+    # Adicione aqui todos os nomes normalizados dos seus consumíveis!
+]
+
 TRAUMAS = [
     "Hipervigilância: não consegue dormir sem vigiar todas as entradas.",
     "Tremor incontrolável nas mãos em situações de estresse.",
@@ -243,15 +248,21 @@ def update_pericia(uid, nome, valor):
 def update_inventario(uid, item):
     conn = get_conn()
     c = conn.cursor()
-    c.execute("INSERT INTO inventario(player_id,nome,peso,quantidade) VALUES(%s,%s,%s,%s) ON CONFLICT (player_id, nome) DO UPDATE SET peso=%s, quantidade=%s",
-        (uid, item['nome'], item['peso'], item['quantidade'], item['peso'], item['quantidade']))
+    c.execute("SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item['nome']))
+    row = c.fetchone()
+    if row:
+        c.execute("UPDATE inventario SET quantidade=%s, peso=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                  (item['quantidade'], item['peso'], uid, item['nome']))
+    else:
+        c.execute("INSERT INTO inventario(player_id, nome, peso, quantidade) VALUES (%s, %s, %s, %s)",
+                  (uid, item['nome'], item['peso'], item['quantidade']))
     conn.commit()
     conn.close()
 
 def adjust_item_quantity(uid, item_nome, delta):
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT quantidade, peso FROM inventario WHERE player_id=%s AND nome=%s", (uid, item_nome))
+    c.execute("SELECT quantidade, peso FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item_nome))
     row = c.fetchone()
     if not row:
         conn.close()
@@ -259,9 +270,9 @@ def adjust_item_quantity(uid, item_nome, delta):
     qtd, peso = row
     nova = qtd + delta
     if nova <= 0:
-        c.execute("DELETE FROM inventario WHERE player_id=%s AND nome=%s", (uid, item_nome))
+        c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item_nome))
     else:
-        c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND nome=%s", (nova, uid, item_nome))
+        c.execute("UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (nova, uid, item_nome))
     conn.commit()
     conn.close()
     return True
@@ -300,10 +311,13 @@ def list_catalog():
     conn.close()
     return data
 
+def is_consumivel(nome):
+    return normalizar(nome) in [normalizar(x) for x in CONSUMIVEIS]
+
 def remove_item(uid, item_nome):
     conn = get_conn()
     c = conn.cursor()
-    c.execute("DELETE FROM inventario WHERE player_id=%s AND nome=%s", (uid, item_nome))
+    c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (uid, item_nome))
     conn.commit()
     conn.close()
 
@@ -1044,6 +1058,7 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
                         (nova_qtd_doador, doador, item)
                     )
+        
             else:
                 if is_admin(doador):
                     item_info = get_catalog_item(item)
@@ -1059,13 +1074,12 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     TRANSFER_PENDING.pop(transfer_key, None)
                     return
 
-            # Credita no alvo (sempre stacka, mesmo com variação de caixa ou acento)
+            # SEMPRE stacka no inventário do alvo, vindo do catálogo ou não!
             c.execute(
                 "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
                 (alvo, item)
             )
             row_tgt = c.fetchone()
-            
             if row_tgt:
                 nova_qtd_tgt = row_tgt[0] + qtd
                 c.execute(
@@ -1125,11 +1139,21 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========================= ABANDONAR =========================
 async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
-        await update.message.reply_text("Uso: /abandonar Nome do item")
+        await update.message.reply_text("Uso: /abandonar Nome do item xquantidade (opcional)")
         return
 
     uid = update.effective_user.id
-    item_input = " ".join(context.args)
+
+    args = context.args
+    if len(args) >= 2 and args[-2].lower() == 'x' and args[-1].isdigit():
+        qtd = int(args[-1])
+        item_input = " ".join(args[:-2])
+    elif len(args) >= 2 and args[-1].isdigit():
+        qtd = int(args[-1])
+        item_input = " ".join(args[:-1])
+    else:
+        qtd = 1
+        item_input = " ".join(args)
 
     conn = get_conn()
     c = conn.cursor()
@@ -1143,17 +1167,19 @@ async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Você não possui '{item_input}' no seu inventário.")
         return
 
-    item_nome, item_peso, qtd = row
+    item_nome, item_peso, qtd_inv = row
+    if qtd < 1 or qtd > qtd_inv:
+        conn.close()
+        await update.message.reply_text(f"❌ Quantidade inválida. Você tem {qtd_inv} '{item_nome}'.")
+        return
+
     conn.close()
 
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_abandonar_{uid}_{quote(item_nome)}"),
-            InlineKeyboardButton("❌ Cancelar", callback_data="cancel_abandonar")
-        ]
-    ]
+    keyboard = [[
+        InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_abandonar_{uid}_{quote(item_nome)}_{qtd}"),
+        InlineKeyboardButton("❌ Cancelar", callback_data="cancel_abandonar")
+    ]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     await update.message.reply_text(
         f"⚠️ Você está prestes a abandonar '{item_nome}' x{qtd}. Confirma?",
         reply_markup=reply_markup
@@ -1166,12 +1192,15 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
     data = query.data
 
     if data.startswith("confirm_abandonar_"):
-        parts = data.split("_", 3)
-        if len(parts) < 4:
+        # partes: confirm_abandonar_uid_item_nome_qtd (nome pode ter _)
+        try:
+            prefix, uid_str, *rest = data.split("_")
+            qtd = int(rest[-1])
+            item_nome = "_".join(rest[:-1])
+        except Exception:
             await query.edit_message_text("❌ Dados inválidos.")
             return
-            
-        _, _, uid_str, item_nome = parts
+
         uid = int(uid_str)
         item_nome = unquote(item_nome)
 
@@ -1183,9 +1212,24 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
         c = conn.cursor()
         try:
             c.execute(
-                "DELETE FROM inventario WHERE player_id=%s AND nome=%s",
+                "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
                 (uid, item_nome)
             )
+            row = c.fetchone()
+            if not row:
+                await query.edit_message_text("❌ Item não encontrado no inventário.")
+                return
+            qtd_inv = row[0]
+            if qtd >= qtd_inv:
+                c.execute(
+                    "DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                    (uid, item_nome)
+                )
+            else:
+                c.execute(
+                    "UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                    (qtd_inv - qtd, uid, item_nome)
+                )
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -1199,12 +1243,68 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
         total_peso = peso_total(jogador)
 
         await query.edit_message_text(
-            f"✅ '{item_nome}' foi abandonado.\n"
+            f"✅ '{item_nome}' x{qtd} foi abandonado.\n"
             f"📦 Inventário agora: {total_peso:.1f}/{jogador['peso_max']} kg"
         )
 
     elif data == "cancel_abandonar":
         await query.edit_message_text("❌ Ação cancelada.")
+
+async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 1:
+        await update.message.reply_text("Uso: /consumir Nome do item xquantidade (opcional)")
+        return
+
+    uid = update.effective_user.id
+
+    args = context.args
+    if len(args) >= 2 and args[-2].lower() == 'x' and args[-1].isdigit():
+        qtd = int(args[-1])
+        item_input = " ".join(args[:-2])
+    elif len(args) >= 2 and args[-1].isdigit():
+        qtd = int(args[-1])
+        item_input = " ".join(args[:-1])
+    else:
+        qtd = 1
+        item_input = " ".join(args)
+
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT nome, quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+        (uid, item_input.lower())
+    )
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        await update.message.reply_text(f"❌ Você não possui '{item_input}' no seu inventário.")
+        return
+
+    item_nome, qtd_inv = row
+    if not is_consumivel(item_nome):
+        conn.close()
+        await update.message.reply_text(f"❌ '{item_nome}' não é um item consumível.")
+        return
+
+    if qtd < 1 or qtd > qtd_inv:
+        conn.close()
+        await update.message.reply_text(f"❌ Quantidade inválida. Você tem {qtd_inv} '{item_nome}'.")
+        return
+
+    if qtd == qtd_inv:
+        c.execute(
+            "DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+            (uid, item_nome)
+        )
+    else:
+        c.execute(
+            "UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+            (qtd_inv - qtd, uid, item_nome)
+        )
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(f"🍽️ Você consumiu '{item_nome}' x{qtd}!")
 
 async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
@@ -1763,6 +1863,7 @@ def main():
     app.add_handler(CallbackQueryHandler(transfer_callback, pattern=r'^(confirm_dar_|cancel_dar_)'))
     app.add_handler(CommandHandler("abandonar", abandonar))
     app.add_handler(CallbackQueryHandler(callback_abandonar, pattern=r'^confirm_abandonar_|^cancel_abandonar$'))
+    app.add_handler(CommandHandler("consumir", consumir))
     app.add_handler(CommandHandler("dano", dano))
     app.add_handler(CommandHandler("autodano", autodano))
     app.add_handler(CommandHandler("cura", cura))
