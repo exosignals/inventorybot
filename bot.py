@@ -3,6 +3,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler
+from urllib.parse import quote, unquote
 import psycopg2
 import psycopg2.extras
 import os
@@ -681,6 +682,7 @@ async def delitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ Item não encontrado no catálogo.")
 
+# ========================= DAR =========================
 async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Anti-spam
     if not anti_spam(update.effective_user.id):
@@ -746,7 +748,7 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     conn.close()
 
-    # Checa sobrecarga do alvo, mas **não cancela**, só avisa
+    # Checa sobrecarga do alvo, mas não cancela, só avisa
     target_before = get_player(target_id)
     total_depois_target = peso_total(target_before) + item_peso * qtd
     aviso_sobrecarga = ""
@@ -756,7 +758,7 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Criar chave única com timestamp para evitar conflitos
     timestamp = int(time.time())
-    transfer_key = f"{uid_from}_{timestamp}"
+    transfer_key = f"{uid_from}_{timestamp}_{quote(item_nome)}"
     
     # Salva transferência pendente com expiração
     TRANSFER_PENDING[transfer_key] = {
@@ -780,13 +782,14 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
+# ========================= CALLBACK DAR =========================
 async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     data = query.data
 
-    # Confirmação
+    # ================= CONFIRMAÇÃO =================
     if data.startswith("confirm_dar_"):
         transfer_key = data.replace("confirm_dar_", "")
         transfer = TRANSFER_PENDING.get(transfer_key)
@@ -878,7 +881,7 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         TRANSFER_PENDING.pop(transfer_key, None)
 
-        # Recarrega pesos e mostra sobrecarga caso exista
+        # Atualiza pesos e sobrecarga
         giver_after = get_player(doador)
         target_after = get_player(alvo)
         total_giver = peso_total(giver_after)
@@ -893,7 +896,7 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{aviso_sobrecarga}"
         )
 
-    # Cancelamento
+    # ================= CANCELAMENTO =================
     elif data.startswith("cancel_dar_"):
         transfer_key = data.replace("cancel_dar_", "")
         transfer = TRANSFER_PENDING.get(transfer_key)
@@ -909,6 +912,7 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         TRANSFER_PENDING.pop(transfer_key, None)
         await query.edit_message_text("❌ Transferência cancelada pelo jogador.")
 
+# ========================= ABANDONAR =========================
 async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
         await update.message.reply_text("Uso: /abandonar Nome do item")
@@ -917,7 +921,6 @@ async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     item_input = " ".join(context.args)
 
-    # Conecta ao banco
     conn = get_conn()
     c = conn.cursor()
     c.execute(
@@ -933,10 +936,9 @@ async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     item_nome, item_peso, qtd = row
     conn.close()
 
-    # Cria teclado de confirmação
     keyboard = [
         [
-            InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_abandonar_{uid}_{item_nome}"),
+            InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_abandonar_{uid}_{quote(item_nome)}"),
             InlineKeyboardButton("❌ Cancelar", callback_data="cancel_abandonar")
         ]
     ]
@@ -947,23 +949,22 @@ async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# ================= CALLBACK PARA CONFIRMAÇÃO =================
+# ========================= CALLBACK ABANDONAR =========================
 async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
 
     if data.startswith("confirm_abandonar_"):
-        # Parse: confirm_abandonar_uid_item_nome
-        parts = data.split("_", 3)  # Divide em no máximo 4 partes
+        parts = data.split("_", 3)
         if len(parts) < 4:
             await query.edit_message_text("❌ Dados inválidos.")
             return
             
         _, _, uid_str, item_nome = parts
         uid = int(uid_str)
+        item_nome = unquote(item_nome)
 
-        # CORREÇÃO DE SEGURANÇA: Verificar se quem clicou é o mesmo usuário
         if query.from_user.id != uid:
             await query.edit_message_text("❌ Você não pode confirmar esta ação.")
             return
@@ -971,7 +972,6 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
         conn = get_conn()
         c = conn.cursor()
         try:
-            # Deleta o item do inventário
             c.execute(
                 "DELETE FROM inventario WHERE player_id=%s AND nome=%s",
                 (uid, item_nome)
@@ -985,7 +985,6 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
         finally:
             conn.close()
 
-        # Atualiza o peso do inventário
         jogador = get_player(uid)
         total_peso = peso_total(jogador)
 
