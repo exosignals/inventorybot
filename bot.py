@@ -34,7 +34,7 @@ MAX_ATRIBUTOS = 20
 MAX_PERICIAS = 40
 ATRIBUTOS_LISTA = ["Força","Destreza","Constituição","Inteligência","Sabedoria","Carisma"]
 PERICIAS_LISTA = ["Percepção","Persuasão","Medicina","Furtividade","Intimidação","Investigação",
-                  "Armas de fogo","Armas brancas","Sobrevivência","Cultura","Intuição","Tecnologia"]
+                  "Pontaria","Luta","Sobrevivência","Cultura","Intuição","Tecnologia"]
 ATRIBUTOS_NORMAL = {normalizar(a): a for a in ATRIBUTOS_LISTA}
 PERICIAS_NORMAL = {normalizar(p): p for p in PERICIAS_LISTA}
 
@@ -474,6 +474,18 @@ async def turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Você já enviou seu turno hoje! Apenas 1 por dia é contabilizado.")
         return
 
+    # 🚨 Caso a pessoa mande só /turno sem texto
+    if not texto_limpo:
+        conn.close()
+        await update.message.reply_text(
+            "ℹ️ Para registrar um turno, use este comando seguido do seu texto.\n\n"
+            "Exemplo:\n"
+            "<code>/turno O personagem caminhou pela floresta, descrevendo as árvores geladas...</code>\n\n"
+            "⚠️ O texto precisa ter no mínimo 499 caracteres para ser contabilizado.",
+            parse_mode="HTML"
+        )
+        return
+
     # ✅ Validação de tamanho mínimo: não salva nada quando inválido
     if caracteres < 499:
         conn.close()  # garante que a conexão não fique aberta
@@ -675,7 +687,7 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         " ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  \n"
         "<code>Força: </code>\n<code>Destreza: </code>\n<code>Constituição: </code>\n<code>Inteligência: </code>\n<code>Sabedoria: </code>\n<code>Carisma: </code>\n\n"
         " ✦︎  𝗣𝗲𝗿𝗶𝗰𝗶𝗮𝘀  \n"
-        "<code>Percepção: </code>\n<code>Persuasão: </code>\n<code>Medicina: </code>\n<code>Furtividade: </code>\n<code>Intimidação: </code>\n<code>Investigação: </code>\n<code>Armas de fogo: </code>\n<code>Armas brancas: </code>\n<code>Sobrevivência: </code>\n<code>Cultura: </code>\n<code>Intuição: </code>\n<code>Tecnologia: </code>\n\n"
+        "<code>Percepção: </code>\n<code>Persuasão: </code>\n<code>Medicina: </code>\n<code>Furtividade: </code>\n<code>Intimidação: </code>\n<code>Investigação: </code>\n<code>Pontaria: </code>\n<code>Luta: </code>\n<code>Sobrevivência: </code>\n<code>Cultura: </code>\n<code>Intuição: </code>\n<code>Tecnologia: </code>\n\n"
         " ⓘ <b>ATENÇÃO</b>\n<blockquote> ▸ Cada Atributo e Perícia deve conter, sem exceção, entre 1 e 6 pontos.</blockquote>\n"
         "<blockquote> ▸ A soma de todos o pontos de Atributos deve totalizar 20</blockquote>\n"
         "<blockquote> ▸ A soma de todos o pontos de Perícia deve totalizar 40.</blockquote>\n"
@@ -1667,17 +1679,59 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     semana = semana_atual()
     conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT player_id, xp_total FROM xp_semana WHERE semana_inicio=%s ORDER BY xp_total DESC LIMIT 3", (semana,))
+
+    # Top 10 da semana
+    c.execute("""
+        SELECT player_id, xp_total, streak_atual
+        FROM xp_semana
+        WHERE semana_inicio=%s
+        ORDER BY xp_total DESC
+        LIMIT 10
+    """, (semana,))
     top = c.fetchall()
-    players = {pid: get_player(pid) for pid, _ in top}
-    lines = ["🏆 Ranking semanal:"]
+
+    # Ranking completo para achar posição do player
+    c.execute("""
+        SELECT player_id, xp_total, streak_atual
+        FROM xp_semana
+        WHERE semana_inicio=%s
+        ORDER BY xp_total DESC
+    """, (semana,))
+    ranking_full = c.fetchall()
+    conn.close()
+
+    players = {pid: get_player(pid) for pid, _, _ in ranking_full}
+
+    uid = update.effective_user.id
+    lines = ["🏆 <b>Ranking semanal (Top 10)</b>"]
     medals = ['🥇', '🥈', '🥉']
-    for idx, (pid, xp) in enumerate(top):
+
+    for idx, (pid, xp, streak) in enumerate(top):
         nome = players[pid]['nome'] if players.get(pid) else f"ID:{pid}"
-        lines.append(f"{medals[idx]} <b>{nome}</b> – XP: {xp}")
+        medal = medals[idx] if idx < len(medals) else f"{idx+1}."
+        highlight = " <b>(Você)</b>" if pid == uid else ""
+        lines.append(f"{medal} <b>{nome}</b> — {xp} XP | 🔥 Streak: {streak}d{highlight}")
+
     if not top:
         lines.append("Ninguém tem XP ainda nesta semana!")
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    # Se o jogador não estiver no Top 10, mostra posição separada
+    if uid not in [pid for pid, _, _ in top]:
+        for pos, (pid, xp, streak) in enumerate(ranking_full, start=1):
+            if pid == uid:
+                nome = players[pid]['nome'] if players.get(pid) else f"ID:{pid}"
+                lines.append(
+                    f"\n➡️ Sua posição: {pos}º — <b>{nome}</b> — {xp} XP | 🔥 Streak: {streak}d"
+                )
+                break
+
+    text = "\n".join(lines)
+
+    # Responde certo dependendo da origem
+    if update.message:  # comando /ranking
+        await update.message.reply_text(text, parse_mode="HTML")
+    elif update.callback_query:  # botão
+        await update.callback_query.message.reply_text(text, parse_mode="HTML")
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
