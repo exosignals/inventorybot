@@ -1191,7 +1191,7 @@ async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.close()
 
-    # Agora o uid vai no callback_data do botão cancelar também
+    # Botões com uid do dono em ambos
     keyboard = [[
         InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_abandonar_{uid}_{quote(item_nome)}_{qtd}"),
         InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_abandonar_{uid}")
@@ -1217,6 +1217,7 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
         item_nome = unquote(item_nome)
         qtd = int(qtd)
         
+        # Só o dono pode confirmar
         if query.from_user.id != uid:
             await query.answer("Só o dono pode confirmar!", show_alert=True)
             return
@@ -1261,8 +1262,12 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
     elif data.startswith("cancel_abandonar_"):
-        _, _, dono_uid_str = data.split("_", 2)
-        dono_uid = int(dono_uid_str)
+        try:
+            # Pega o último pedaço do callback_data, que é o uid
+            dono_uid = int(data.split("_")[-1])
+        except ValueError:
+            await query.edit_message_text("❌ Dados inválidos.")
+            return
 
         if query.from_user.id != dono_uid:
             await query.answer("Só o dono pode cancelar!", show_alert=True)
