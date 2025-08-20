@@ -638,15 +638,15 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not player:
         await update.message.reply_text("Você precisa usar /start primeiro!")
         return
-    text = "\u200B\n「  ཀ  𝗗𝗘𝗔𝗗𝗟𝗜𝗡𝗘, ficha.  」​\u200B\n\n ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  (20 Pontos)\n"
+    text = "\u200B\n「  ཀ  𝗗𝗘𝗔𝗗𝗟𝗜𝗡𝗘, ficha.  」​\u200B\n\n ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  \n"
     for a in ATRIBUTOS_LISTA:
         val = player["atributos"].get(a, 0)
         text += f" — {a}﹕{val}\n"
-    text += "\n ✦︎  𝗣𝗲𝗿𝗶𝗰𝗶𝗮𝘀  (40 Pontos)\n"
+    text += "\n ✦︎  𝗣𝗲𝗿𝗶𝗰𝗶𝗮𝘀  \n"
     for p in PERICIAS_LISTA:
         val = player["pericias"].get(p, 0)
         text += f" — {p}﹕{val}\n"
-    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']}\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']}\n"
+    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']}/40\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']}/40\n"
     total_peso = peso_total(player)
     sobre = "  ⚠︎  Você está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
     text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f}/{player['peso_max']}{sobre}\n\n"
@@ -684,11 +684,10 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     text = (
         "\u200B\nPara editar os pontos em sua ficha, responda em apenas uma mensagem todas as alterações que deseja realizar. Você pode mudar quantos Atributos e Perícias quiser de uma só vez! \n\n"
-        "<b>EXEMPLO</b>\n<blockquote>Força: 3\nPersuasão: 2\nMedicina: 1</blockquote>\n\n"
-        "<i>TODOS os Atributos e Perícias, pronto para só copiar, colar, preencher e enviar</i>"
-        "<pre>Força: \nDestreza: \nConstituição: \nInteligência: \nSabedoria: \nCarisma: </pre>\n\n"
-        "<pre>Percepção: \nPersuasão: \nMedicina: \nFurtividade: \nIntimidação: \nInvestigação: \nPontaria: \nLuta: \nSobrevivência: \nCultura: \nIntuição: \nTecnologia: </pre>\n\n"
-        " ⓘ <b>ATENÇÃO</b>\n<blockquote> ▸ Cada Atributo e Perícia deve conter, sem exceção, entre 1 e 6 pontos.</blockquote>\n"
+        " ⤷ <b>EXEMPLO</b>\n\n<blockquote>Força: 3\nPersuasão: 2\nMedicina: 1</blockquote>\n\n"
+        "TODOS os Atributos e Perícias, é só copiar, colar, preencher e enviar!\n"
+        "\n<pre>Força: \nDestreza: \nConstituição: \nInteligência: \nSabedoria: \nCarisma: \nPercepção: \nPersuasão: \nMedicina: \nFurtividade: \nIntimidação: \nInvestigação: \nPontaria: \nLuta: \nSobrevivência: \nCultura: \nIntuição: \nTecnologia: </pre>\n\n"
+        " ⓘ <b>ATENÇÃO</b>\n\n<blockquote> ▸ Cada Atributo e Perícia deve conter, sem exceção, entre 1 e 6 pontos.</blockquote>\n"
         "<blockquote> ▸ A soma de todos o pontos de Atributos deve totalizar 20</blockquote>\n"
         "<blockquote> ▸ A soma de todos o pontos de Perícia deve totalizar 40.</blockquote>\n"
         "<blockquote> ▸ Você tem 5 minutos para enviar as alterações.</blockquote>\n\u200B"
@@ -793,15 +792,15 @@ async def verficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Monta a ficha (mesmo formato do comando /ficha)
-    text = f"\u200B\n 「  ཀ  𝗗𝗘𝗔𝗗𝗟𝗜𝗡𝗘, ficha de {player['nome']}.  」​\u200B\n\n ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  (20 Pontos)\n"
+    text = f"\u200B\n 「  ཀ  𝗗𝗘𝗔𝗗𝗟𝗜𝗡𝗘, ficha de {player['nome']}.  」​\u200B\n\n ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  \n"
     for a in ATRIBUTOS_LISTA:
         val = player["atributos"].get(a, 0)
         text += f" — {a}﹕{val}\n"
-    text += "\n ✦︎  𝗣𝗲𝗿𝗶𝗰𝗶𝗮𝘀  (40 Pontos)\n"
+    text += "\n ✦︎  𝗣𝗲𝗿𝗶𝗰𝗶𝗮𝘀  \n"
     for p in PERICIAS_LISTA:
         val = player["pericias"].get(p, 0)
         text += f" — {p}﹕{val}\n"
-    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']}\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']}\n"
+    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']}/40\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']}/40\n"
     
     total_peso = peso_total(player)
     sobre = "  ⚠︎  Jogador está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
@@ -838,7 +837,7 @@ async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f" ⚠︎ {excesso:.1f} kg de <b>SOBRECARGA</b>!")
     penal = penalidade_sobrecarga(player)
     if penal:
-        lines.append(f"⚠︎ Penalidade ativa: {penal} em Força, Destreza e Furtividade!")
+        lines.append(f"  ⚠︎ Penalidade ativa: {penal} em Força, Destreza e Furtividade!\n")
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -849,7 +848,7 @@ async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not data:
         await update.message.reply_text("\u200B\n ☰  Catálogo\n Vazio.\n Use /additem Nome Peso para adicionar.\n\u200B")
         return
-    lines = ["\u200B ☰  Catálogo de Itens\n"]
+    lines = ["\u200B\n ☰  Catálogo de Itens\n\n"]
     for nome, peso in data:
         lines.append(f" — {nome} ({peso:.2f} kg)")
     await update.message.reply_text("\n".join(lines))
@@ -964,7 +963,7 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     aviso_sobrecarga = ""
     if total_depois_target > target_before['peso_max']:
         excesso = total_depois_target - target_before['peso_max']
-        aviso_sobrecarga = f"⚠️ Atenção! {target_before['nome']} ficaria com sobrecarga de {excesso:.1f} kg."
+        aviso_sobrecarga = f"  ⚠️ Atenção! {target_before['nome']} ficará com sobrecarga de {excesso:.1f} kg."
 
     # Criar chave única com timestamp para evitar conflitos
     timestamp = int(time.time())
@@ -1097,7 +1096,7 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_giver = peso_total(giver_after)
         total_target = peso_total(target_after)
         excesso = max(0, total_target - target_after['peso_max'])
-        aviso_sobrecarga = f"\n⚠️ {target_after['nome']} está com sobrecarga de {excesso:.1f} kg!" if excesso else ""
+        aviso_sobrecarga = f"\n  ⚠️ {target_after['nome']} está com sobrecarga de {excesso:.1f} kg!" if excesso else ""
 
         await query.edit_message_text(
             f"✅ Transferência confirmada! {item} x{qtd} entregue.\n"
