@@ -1261,20 +1261,26 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"📦 Inventário agora: {total_peso:.1f}/{jogador['peso_max']} kg"
         )
 
+    # ================= CANCELAR =================
     elif data.startswith("cancel_abandonar_"):
         try:
-            uid = int(data.split("_")[-1])
+            uid = int(data.split("_")[-1])  # cancel_abandonar_<uid>
         except ValueError:
             await query.edit_message_text("❌ Dados inválidos.")
             return
-        
+
+        # Só o dono pode cancelar
         if query.from_user.id != uid:
             await query.answer("Só o dono pode cancelar!", show_alert=True)
             return
-        
-        await query.answer()  
+
+        await query.answer()
         await query.edit_message_text("❌ Ação cancelada.")
-        
+
+    else:
+        await query.answer("Callback inválido.", show_alert=True)
+
+
 async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
         await update.message.reply_text("Uso: /consumir Nome do item xquantidade (opcional)")
