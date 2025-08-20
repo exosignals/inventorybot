@@ -460,15 +460,27 @@ async def turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
     semana = semana_atual()
 
     texto = update.message.text or ""
-    texto_limpo = re.sub(r'^/turno', '', texto, flags=re.IGNORECASE).strip()
+    # aceita também /turno@BotUsername
+    texto_limpo = re.sub(r'^/turno(?:@\w+)?', '', texto, flags=re.IGNORECASE).strip()
     caracteres = len(texto_limpo)
 
     conn = get_conn()
     c = conn.cursor()
+
+    # Bloqueia segunda tentativa no mesmo dia apenas se já houver um turno VÁLIDO registrado
     c.execute("SELECT 1 FROM turnos WHERE player_id=%s AND data=%s", (uid, hoje))
     if c.fetchone():
         conn.close()
         await update.message.reply_text("Você já enviou seu turno hoje! Apenas 1 por dia é contabilizado.")
+        return
+
+    # ✅ Validação de tamanho mínimo: não salva nada quando inválido
+    if caracteres < 499:
+        conn.close()  # garante que a conexão não fique aberta
+        await update.message.reply_text(
+            f"⚠️ Seu turno precisa ter pelo menos 499 caracteres! (Atualmente: {caracteres})\n"
+            "Nada foi registrado. Envie novamente com mais conteúdo."
+        )
         return
 
     mencoes = set(re.findall(r"@(\w+)", texto_limpo))
@@ -502,11 +514,17 @@ async def turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     xp_dia = min(xp + bonus_streak, 25)
 
-    c.execute("INSERT INTO turnos (player_id, data, caracteres, mencoes) VALUES (%s, %s, %s, %s)",
-        (uid, hoje, caracteres, mencoes_str))
-    c.execute("INSERT INTO xp_semana (player_id, semana_inicio, xp_total, streak_atual) VALUES (%s, %s, %s, %s) "
-              "ON CONFLICT (player_id, semana_inicio) DO UPDATE SET xp_total = xp_semana.xp_total + %s, streak_atual = %s",
-              (uid, semana, xp_dia, streak_atual, xp_dia, streak_atual))
+    # Só insere porque já passou na validação (>= 499)
+    c.execute(
+        "INSERT INTO turnos (player_id, data, caracteres, mencoes) VALUES (%s, %s, %s, %s)",
+        (uid, hoje, caracteres, mencoes_str)
+    )
+    c.execute(
+        "INSERT INTO xp_semana (player_id, semana_inicio, xp_total, streak_atual) VALUES (%s, %s, %s, %s) "
+        "ON CONFLICT (player_id, semana_inicio) DO UPDATE SET xp_total = xp_semana.xp_total + %s, streak_atual = %s",
+        (uid, semana, xp_dia, streak_atual, xp_dia, streak_atual)
+    )
+
     # Interação mútua diária
     interacoes_bonificadas = set()
     for mencionado in mencoes:
@@ -527,6 +545,7 @@ async def turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             await context.bot.send_message(mencionado_id, f"🎉 Você e @{username} mencionaram um ao outro no turno de hoje! Ambos ganharam +5 XP de interação mútua.", parse_mode="HTML")
                         except Exception as e:
                             logger.warning(f"Falha ao enviar mensagem privada de bônus: {e}")
+
     conn.commit()
     conn.close()
 
