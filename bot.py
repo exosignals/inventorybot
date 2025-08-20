@@ -1036,12 +1036,12 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 nova_qtd_doador = qtd_doador - qtd
                 if nova_qtd_doador <= 0:
                     c.execute(
-                        "DELETE FROM inventario WHERE player_id=%s AND nome=%s",
+                        "DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
                         (doador, item)
                     )
                 else:
                     c.execute(
-                        "UPDATE inventario SET quantidade=%s WHERE player_id=%s AND nome=%s",
+                        "UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
                         (nova_qtd_doador, doador, item)
                     )
             else:
@@ -1059,16 +1059,17 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     TRANSFER_PENDING.pop(transfer_key, None)
                     return
 
-            # Credita no alvo
+            # Credita no alvo (sempre stacka, mesmo com variação de caixa ou acento)
             c.execute(
                 "SELECT quantidade FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
                 (alvo, item)
             )
             row_tgt = c.fetchone()
+            
             if row_tgt:
                 nova_qtd_tgt = row_tgt[0] + qtd
                 c.execute(
-                    "UPDATE inventario SET quantidade=%s WHERE player_id=%s AND nome=%s",
+                    "UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
                     (nova_qtd_tgt, alvo, item)
                 )
             else:
