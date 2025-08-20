@@ -26,7 +26,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("NEON_DATABASE_URL")
 
 ADMIN_IDS = {int(x) for x in os.getenv("ADMINS", "").split(",") if x.strip().isdigit()}
-PESO_MAX = {1: 5, 2: 10, 3: 15, 4: 20, 5: 25, 6: 30}
+PESO_MAX = {1: 5.0, 2: 10.0, 3: 15.0, 4: 20.0, 5: 25.0, 6: 30.0}
 LAST_COMMAND = {}
 COOLDOWN = 1
 
@@ -646,10 +646,10 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for p in PERICIAS_LISTA:
         val = player["pericias"].get(p, 0)
         text += f" — {p}﹕{val}\n"
-    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']}/40\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']}/40\n"
+    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']} / 40\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']} / 40\n"
     total_peso = peso_total(player)
     sobre = "  ⚠︎  Você está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
-    text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f}/{player['peso_max']}{sobre}\n\n"
+    text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f} / {player['peso_max']}{sobre}\n\n"
     penal = penalidade_sobrecarga(player)
     if penal:
         text += f"⚠︎ Penalidade ativa: {penal} em Força, Destreza e Furtividade!\n"
@@ -800,11 +800,11 @@ async def verficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for p in PERICIAS_LISTA:
         val = player["pericias"].get(p, 0)
         text += f" — {p}﹕{val}\n"
-    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']}/40\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']}/40\n"
+    text += f"\n 𖹭  𝗛𝗣  (Vida)  ▸  {player['hp']} / 40\n 𖦹  𝗦𝗣  (Sanidade)  ▸  {player['sp']} / 40\n"
     
     total_peso = peso_total(player)
     sobre = "  ⚠︎  Jogador está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
-    text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f}/{player['peso_max']}{sobre}\n"
+    text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f} / {player['peso_max']}{sobre}\n"
     
     # Adiciona informações extras para admin
     text += f"\n📊 <b>Info Admin:</b>\n"
