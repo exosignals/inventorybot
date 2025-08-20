@@ -38,6 +38,7 @@ ATRIBUTOS_NORMAL = {normalizar(a): a for a in ATRIBUTOS_LISTA}
 PERICIAS_NORMAL = {normalizar(p): p for p in PERICIAS_LISTA}
 
 EDIT_PENDING = {}
+EDIT_TIMERS = {}  # Para timeouts de edição
 
 # Dicionário temporário para armazenar transferências pendentes
 TRANSFER_PENDING = {}
@@ -354,18 +355,24 @@ def pop_coma_bonus(target_id: int) -> int:
 
 def reset_diario_rerolls():
     while True:
-        now = datetime.now()
-        next_reset = now.replace(hour=6, minute=0, second=0, microsecond=0)
-        if now >= next_reset:
-            next_reset += timedelta(days=1)
-        wait_seconds = (next_reset - now).total_seconds()
-        time.sleep(wait_seconds)
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("UPDATE players SET rerolls=3")
-        conn.commit()
-        conn.close()
-        logger.info("🔄 Rerolls diários resetados!")
+        try:
+            now = datetime.now()
+            next_reset = now.replace(hour=6, minute=0, second=0, microsecond=0)
+            if now >= next_reset:
+                next_reset += timedelta(days=1)
+            wait_seconds = (next_reset - now).total_seconds()
+            time.sleep(wait_seconds)
+            
+            conn = get_conn()
+            c = conn.cursor()
+            c.execute("UPDATE players SET rerolls=3")
+            conn.commit()
+            conn.close()
+            logger.info("🔄 Rerolls diários resetados!")
+            
+        except Exception as e:
+            logger.error(f"Erro no reset de rerolls: {e}")
+            time.sleep(60)  # Espera 1 minuto antes de tentar novamente
 
 def is_admin(uid: int) -> bool:
     return uid in ADMIN_IDS
@@ -374,6 +381,24 @@ def mention(user):
     if user.username:
         return f"@{user.username}"
     return user.first_name or "Jogador"
+
+def cleanup_expired_transfers():
+    """Remove transferências expiradas periodicamente"""
+    while True:
+        try:
+            now = time.time()
+            expired_keys = []
+            for key, transfer in TRANSFER_PENDING.items():
+                if now > transfer.get('expires', now):
+                    expired_keys.append(key)
+            
+            for key in expired_keys:
+                TRANSFER_PENDING.pop(key, None)
+                
+            time.sleep(300)  # Limpa a cada 5 minutos
+        except Exception as e:
+            logger.error(f"Erro na limpeza de transferências: {e}")
+            time.sleep(60)
 
 # ================== COMANDOS ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -435,6 +460,20 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     EDIT_PENDING[uid] = True
+    
+    # Cancelar timer anterior se existir
+    if uid in EDIT_TIMERS:
+        EDIT_TIMERS[uid].cancel()
+    
+    # Criar timer de 5 minutos para timeout
+    def timeout_edit():
+        EDIT_PENDING.pop(uid, None)
+        EDIT_TIMERS.pop(uid, None)
+        logger.info(f"Timeout de edição para usuário {uid}")
+    
+    EDIT_TIMERS[uid] = threading.Timer(300.0, timeout_edit)
+    EDIT_TIMERS[uid].start()
+    
     text = (
         "\u200B\nPara editar os pontos em sua ficha, responda (em apenas uma mensagem, você pode mudar quantos Atributos/Perícias quiser) com todas as alterações que deseja realizar, com base no modelo à seguir: \n\n"
         " ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  \n"
@@ -443,7 +482,8 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<code>Percepção: </code>\n<code>Persuasão: </code>\n<code>Medicina: </code>\n<code>Furtividade: </code>\n<code>Intimidação: </code>\n<code>Investigação: </code>\n<code>Armas de fogo: </code>\n<code>Armas brancas: </code>\n<code>Sobrevivência: </code>\n<code>Cultura: </code>\n<code>Intuição: </code>\n<code>Tecnologia: </code>\n\n"
         " ⓘ <b>ATENÇÃO</b>\n<blockquote> ▸ Cada Atributo e Perícia deve conter, sem exceção, entre 1 e 6 pontos.</blockquote>\n"
         "<blockquote> ▸ A soma de todos o pontos de Atributos deve totalizar 20</blockquote>\n"
-        "<blockquote> ▸ A soma de todos o pontos de Perícia deve totalizar 40.</blockquote>\n\u200B"
+        "<blockquote> ▸ A soma de todos o pontos de Perícia deve totalizar 40.</blockquote>\n"
+        "<blockquote> ▸ Você tem 5 minutos para enviar as alterações.</blockquote>\n\u200B"
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -510,7 +550,12 @@ async def receber_edicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ensure_peso_max_by_forca(uid)
 
     await update.message.reply_text(" ✅ Ficha atualizada com sucesso!")
+    
+    # Limpar estado de edição e cancelar timer
     EDIT_PENDING.pop(uid, None)
+    if uid in EDIT_TIMERS:
+        EDIT_TIMERS[uid].cancel()
+        EDIT_TIMERS.pop(uid, None)
     
 async def verficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
@@ -583,7 +628,7 @@ async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if penalidade(player):
         excesso = total_peso - player['peso_max']
         lines.append(f" ⚠︎ {excesso:.1f} kg de <b>SOBRECARGA</b>!")
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
@@ -711,18 +756,23 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Salva transferência pendente
-    TRANSFER_PENDING[uid_from] = {
+    # Criar chave única com timestamp para evitar conflitos
+    timestamp = int(time.time())
+    transfer_key = f"{uid_from}_{timestamp}"
+    
+    # Salva transferência pendente com expiração
+    TRANSFER_PENDING[transfer_key] = {
         "item": item_nome,
         "qtd": qtd,
         "doador": uid_from,
-        "alvo": target_id
+        "alvo": target_id,
+        "expires": timestamp + 300  # 5 minutos para expirar
     }
 
     keyboard = [
         [
-            InlineKeyboardButton("✅ Confirmar", callback_data="confirm_dar"),
-            InlineKeyboardButton("❌ Cancelar", callback_data="cancel_dar")
+            InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_dar_{transfer_key}"),
+            InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_dar_{transfer_key}")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -737,17 +787,26 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
+    data = query.data
 
     # Confirmação
-    if query.data == "confirm_dar":
-        # Busca transferência pendente onde o alvo é o user_id
-        transfer = None
-        for k, v in TRANSFER_PENDING.items():
-            if v['alvo'] == user_id:
-                transfer = v
-                break
+    if data.startswith("confirm_dar_"):
+        transfer_key = data.replace("confirm_dar_", "")
+        transfer = TRANSFER_PENDING.get(transfer_key)
+        
         if not transfer:
-            await query.edit_message_text("❌ Nenhuma transferência pendente.")
+            await query.edit_message_text("❌ Transferência não encontrada ou expirada.")
+            return
+        
+        # Verificar se quem está confirmando é o alvo da transferência
+        if transfer['alvo'] != user_id:
+            await query.edit_message_text("❌ Você não pode confirmar esta transferência.")
+            return
+        
+        # Verificar se não expirou
+        if time.time() > transfer['expires']:
+            TRANSFER_PENDING.pop(transfer_key, None)
+            await query.edit_message_text("❌ Transferência expirada.")
             return
 
         doador = transfer['doador']
@@ -785,13 +844,13 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if not item_info:
                         conn.close()
                         await query.edit_message_text("❌ Item não encontrado no catálogo.")
-                        TRANSFER_PENDING.pop(doador)
+                        TRANSFER_PENDING.pop(transfer_key, None)
                         return
                     peso_item = item_info["peso"]
                 else:
                     conn.close()
                     await query.edit_message_text("❌ O doador não tem mais o item.")
-                    TRANSFER_PENDING.pop(doador)
+                    TRANSFER_PENDING.pop(transfer_key, None)
                     return
 
             # Credita no alvo
@@ -813,16 +872,17 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
 
             conn.commit()
-        except Exception:
+        except Exception as e:
             conn.rollback()
             conn.close()
+            logger.error(f"Erro na transferência: {e}")
             await query.edit_message_text("❌ Ocorreu um erro ao transferir o item.")
-            TRANSFER_PENDING.pop(doador)
+            TRANSFER_PENDING.pop(transfer_key, None)
             return
         finally:
             conn.close()
 
-        TRANSFER_PENDING.pop(doador)
+        TRANSFER_PENDING.pop(transfer_key, None)
 
         # Recarrega pesos para mostrar detalhes
         giver_after = get_player(doador)
@@ -837,14 +897,20 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     # Cancelamento
-    elif query.data == "cancel_dar":
-        to_remove = None
-        for k, v in TRANSFER_PENDING.items():
-            if v['alvo'] == user_id:
-                to_remove = k
-                break
-        if to_remove:
-            TRANSFER_PENDING.pop(to_remove)
+    elif data.startswith("cancel_dar_"):
+        transfer_key = data.replace("cancel_dar_", "")
+        transfer = TRANSFER_PENDING.get(transfer_key)
+        
+        if not transfer:
+            await query.edit_message_text("❌ Transferência não encontrada.")
+            return
+            
+        # Verificar se quem está cancelando é o alvo da transferência
+        if transfer['alvo'] != user_id:
+            await query.edit_message_text("❌ Você não pode cancelar esta transferência.")
+            return
+            
+        TRANSFER_PENDING.pop(transfer_key, None)
         await query.edit_message_text("❌ Transferência cancelada pelo jogador.")
 
 async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -874,8 +940,8 @@ async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Cria teclado de confirmação
     keyboard = [
         [
-            InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_abandonar:{uid}:{item_nome}"),
-            InlineKeyboardButton("❌ Cancelar", callback_data="cancel")
+            InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_abandonar_{uid}_{item_nome}"),
+            InlineKeyboardButton("❌ Cancelar", callback_data="cancel_abandonar")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -891,19 +957,37 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     data = query.data
 
-    if data.startswith("confirm_abandonar:"):
-        _, uid_str, item_nome = data.split(":")
+    if data.startswith("confirm_abandonar_"):
+        # Parse: confirm_abandonar_uid_item_nome
+        parts = data.split("_", 3)  # Divide em no máximo 4 partes
+        if len(parts) < 4:
+            await query.edit_message_text("❌ Dados inválidos.")
+            return
+            
+        _, _, uid_str, item_nome = parts
         uid = int(uid_str)
+
+        # CORREÇÃO DE SEGURANÇA: Verificar se quem clicou é o mesmo usuário
+        if query.from_user.id != uid:
+            await query.edit_message_text("❌ Você não pode confirmar esta ação.")
+            return
 
         conn = get_conn()
         c = conn.cursor()
-        # Deleta o item do inventário
-        c.execute(
-            "DELETE FROM inventario WHERE player_id=%s AND nome=%s",
-            (uid, item_nome)
-        )
-        conn.commit()
-        conn.close()
+        try:
+            # Deleta o item do inventário
+            c.execute(
+                "DELETE FROM inventario WHERE player_id=%s AND nome=%s",
+                (uid, item_nome)
+            )
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Erro ao abandonar item: {e}")
+            await query.edit_message_text("❌ Erro ao abandonar o item.")
+            return
+        finally:
+            conn.close()
 
         # Atualiza o peso do inventário
         jogador = get_player(uid)
@@ -914,7 +998,7 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"📦 Inventário agora: {total_peso:.1f}/{jogador['peso_max']} kg"
         )
 
-    elif data == "cancel":
+    elif data == "cancel_abandonar":
         await query.edit_message_text("❌ Ação cancelada.")
 
 async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1279,7 +1363,6 @@ async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🤝 {mention(update.effective_user)} usou {kit_nome} em {alvo_tag}!\nBônus aplicado ao próximo teste de coma: +{bonus}.")
 
-# ==================== ROLL ====================
 async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_reroll=False):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
@@ -1322,7 +1405,6 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
     )
     return True  # rolagem válida
 
-# ==================== REROLL ====================
 async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     player = get_player(uid)
@@ -1331,21 +1413,24 @@ async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if player['rerolls'] <= 0:
-        await update.message.reply_text("Você não tem rerolls disponíveis hoje!")
+        await update.message.reply_text("❌ Você não tem rerolls disponíveis hoje!")
         return
 
-    if uid not in last_roll:
-        await update.message.reply_text("❌ Nenhuma rolagem anterior encontrada para refazer.")
+    if len(context.args) < 1:
+        await update.message.reply_text("Uso: /reroll nome_da_pericia_ou_atributo")
         return
 
-    # Prepara args para o roll e ignora anti-spam
-    context.args = [last_roll[uid]['key']]
-    ok = await roll(update, context, consumir_reroll=True, ignorar_anti_spam=True)
+    # Executa a rolagem normal
+    ok = await roll(update, context, consumir_reroll=True)
 
     if ok:
-        # Decrementa rerolls somente se roll foi bem-sucedido
-        update_player_field(uid, 'rerolls', player['rerolls'] - 1)
-        await update.message.reply_text(f"🔄 Reroll usado! Rerolls restantes: {player['rerolls'] - 1}")
+        # Diminui 1 reroll
+        novos_rerolls = player['rerolls'] - 1
+        update_player_field(uid, 'rerolls', novos_rerolls)
+
+        await update.message.reply_text(
+            f"🔄 Reroll usado! Rerolls restantes: {novos_rerolls}"
+        )
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
@@ -1360,8 +1445,10 @@ def run_flask():
 # ================== MAIN ==================
 def main():
     init_db()
-    threading.Thread(target=run_flask).start()
+    threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=reset_diario_rerolls, daemon=True).start()
+    threading.Thread(target=cleanup_expired_transfers, daemon=True).start()  # Nova thread para limpeza
+    
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ficha", ficha))
