@@ -1152,7 +1152,7 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         TRANSFER_PENDING.pop(transfer_key, None)
         await query.edit_message_text("❌ Transferência cancelada.")
 
-# ========================= ABANDONAR =========================
+# ========================= COMANDO ABANDONAR =========================
 async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 1:
         await update.message.reply_text("Uso: /abandonar Nome do item xquantidade (opcional)")
@@ -1191,9 +1191,10 @@ async def abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.close()
 
+    # Agora o uid vai no callback_data do botão cancelar também
     keyboard = [[
         InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_abandonar_{uid}_{quote(item_nome)}_{qtd}"),
-        InlineKeyboardButton("❌ Cancelar", callback_data="cancel_abandonar")
+        InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_abandonar_{uid}")
     ]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
@@ -1216,7 +1217,6 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
         item_nome = unquote(item_nome)
         qtd = int(qtd)
         
-        # Só o dono pode confirmar
         if query.from_user.id != uid:
             await query.answer("Só o dono pode confirmar!", show_alert=True)
             return
@@ -1260,17 +1260,14 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"📦 Inventário agora: {total_peso:.1f}/{jogador['peso_max']} kg"
         )
 
-    elif data == "cancel_abandonar":
-        # Só o dono pode cancelar
-        msg = query.message.text or ""
-        # Tenta extrair o nome do dono a partir da mensagem (alternativamente, salve em um dict UID <-> msg_id)
-        # MAS, como padrão, só deixa cancelar se foi quem clicou no botão
-        if hasattr(query, "from_user"):
-            uid = query.from_user.id
-            # Aqui você pode comparar com o uid original se quiser mais precisão
-            if query.from_user.id != uid:
-                await query.answer("Só o dono pode cancelar!", show_alert=True)
-                return
+    elif data.startswith("cancel_abandonar_"):
+        _, _, dono_uid_str = data.split("_", 2)
+        dono_uid = int(dono_uid_str)
+
+        if query.from_user.id != dono_uid:
+            await query.answer("Só o dono pode cancelar!", show_alert=True)
+            return
+
         await query.edit_message_text("❌ Ação cancelada.")
         
 async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
