@@ -1453,7 +1453,7 @@ def main():
     app.add_handler(CommandHandler("additem", additem))
     app.add_handler(CommandHandler("delitem", delitem))
     app.add_handler(CommandHandler("dar", dar))
-    app.add_handler(CallbackQueryHandler(transfer_callback, pattern=r'^transfer_'))
+    app.add_handler(CallbackQueryHandler(transfer_callback, pattern=r'^(confirm_dar_|cancel_dar_)'))
     app.add_handler(CommandHandler("abandonar", abandonar))
     app.add_handler(CallbackQueryHandler(callback_abandonar, pattern=r'^confirm_abandonar_|^cancel_abandonar$'))
     app.add_handler(CommandHandler("dano", dano))
