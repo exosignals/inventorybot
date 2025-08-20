@@ -1077,7 +1077,6 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
                         (nova_qtd_doador, doador, item)
                     )
-        
             else:
                 if is_admin(doador):
                     item_info = get_catalog_item(item)
@@ -1102,8 +1101,8 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if row_tgt:
                 nova_qtd_tgt = row_tgt[0] + qtd
                 c.execute(
-                    "UPDATE inventario SET quantidade=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
-                    (nova_qtd_tgt, alvo, item)
+                    "UPDATE inventario SET quantidade=%s, peso=%s WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
+                    (nova_qtd_tgt, peso_item, alvo, item)
                 )
             else:
                 c.execute(
