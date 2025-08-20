@@ -683,11 +683,11 @@ async def editarficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     EDIT_TIMERS[uid].start()
     
     text = (
-        "\u200B\nPara editar os pontos em sua ficha, responda (em apenas uma mensagem, você pode mudar quantos Atributos/Perícias quiser) com todas as alterações que deseja realizar, com base no modelo à seguir: \n\n"
-        " ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  \n"
-        "<code>Força: </code>\n<code>Destreza: </code>\n<code>Constituição: </code>\n<code>Inteligência: </code>\n<code>Sabedoria: </code>\n<code>Carisma: </code>\n\n"
-        " ✦︎  𝗣𝗲𝗿𝗶𝗰𝗶𝗮𝘀  \n"
-        "<code>Percepção: </code>\n<code>Persuasão: </code>\n<code>Medicina: </code>\n<code>Furtividade: </code>\n<code>Intimidação: </code>\n<code>Investigação: </code>\n<code>Pontaria: </code>\n<code>Luta: </code>\n<code>Sobrevivência: </code>\n<code>Cultura: </code>\n<code>Intuição: </code>\n<code>Tecnologia: </code>\n\n"
+        "\u200B\nPara editar os pontos em sua ficha, responda em apenas uma mensagem todas as alterações que deseja realizar. Você pode mudar quantos Atributos e Perícias quiser de uma só vez! \n\n"
+        "<b>EXEMPLO</b>\n<blockquote>Força: 3\nPersuasão: 2\nMedicina: 1</blockquote>\n\n"
+        "<i>TODOS os Atributos e Perícias, pronto para só copiar, colar, preencher e enviar</i>"
+        "<pre>Força: \nDestreza: \nConstituição: \nInteligência: \nSabedoria: \nCarisma: </pre>\n\n"
+        "<pre>Percepção: \nPersuasão: \nMedicina: \nFurtividade: \nIntimidação: \nInvestigação: \nPontaria: \nLuta: \nSobrevivência: \nCultura: \nIntuição: \nTecnologia: </pre>\n\n"
         " ⓘ <b>ATENÇÃO</b>\n<blockquote> ▸ Cada Atributo e Perícia deve conter, sem exceção, entre 1 e 6 pontos.</blockquote>\n"
         "<blockquote> ▸ A soma de todos o pontos de Atributos deve totalizar 20</blockquote>\n"
         "<blockquote> ▸ A soma de todos o pontos de Perícia deve totalizar 40.</blockquote>\n"
