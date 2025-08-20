@@ -418,7 +418,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     "Este bot gerencia seus Dados, Ficha, Inventário, Vida e Sanidade, além de diversos outros sistemas que você poderá explorar.\n\n"
     "Use o comando <b>/ficha</b> para visualizar sua ficha atual. "
     "Para editá-la, use o comando <b>/editarficha</b>.\n\n"
-    "Outros comandos úteis: <b>/inventario</b>, <b>/itens</b>, <b>/dar</b>, <b>/cura</b>, <b>/terapia</b>, <b>/coma</b>, <b>/ajudar</b>.\n\n"
+    "Outros comandos úteis: <b>/roll</b>, <b>/inventario</b>, <b>/dar</b>, <b>/abandonar</b>, <b>/dano</b>, <b>/cura</b>, <b>/terapia</b>.\n\n"
     " 𝗔𝗽𝗿𝗼𝘃𝗲𝗶𝘁𝗲!\n\u200B",
     parse_mode="HTML"
 )
@@ -433,7 +433,7 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not player:
         await update.message.reply_text("Você precisa usar /start primeiro!")
         return
-    text = "\u200B\n 「  ཀ  𝗗𝗘𝗔𝗗𝗟𝗜𝗡𝗘, ficha.  」​\u200B\n\n ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  (20 Pontos)\n"
+    text = "\u200B\n「  ཀ  𝗗𝗘𝗔𝗗𝗟𝗜𝗡𝗘, ficha.  」​\u200B\n\n ✦︎  𝗔𝘁𝗿𝗶𝗯𝘂𝘁𝗼𝘀  (20 Pontos)\n"
     for a in ATRIBUTOS_LISTA:
         val = player["atributos"].get(a, 0)
         text += f" — {a}﹕{val}\n"
@@ -617,12 +617,12 @@ async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not player:
         await update.message.reply_text("Use /start primeiro!")
         return
-    lines = [f"\u200B\n「 📦 」  Inventário de {player['nome']}\n"]
+    lines = [f"\u200B\n「 📦 」 Inventário de {player['nome']}\n"]
     if not player['inventario']:
-        lines.append(" Vazio.")
+        lines.append("  Vazio.")
     else:
         for i in sorted(player['inventario'], key=lambda x: x['nome'].lower()):
-            lines.append(f" — {i['nome']} x{i['quantidade']} ({i['peso']:.2f} kg cada)")
+            lines.append(f"  — {i['nome']} x{i['quantidade']} ({i['peso']:.2f} kg cada)")
     total_peso = peso_total(player)
     lines.append(f"\n  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹﹕{total_peso:.1f}/{player['peso_max']} kg\n\u200B")
     if penalidade(player):
@@ -636,7 +636,7 @@ async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     data = list_catalog()
     if not data:
-        await update.message.reply_text("\u200B\n ☰  Catálogo\nVazio. Use /additem Nome Peso para adicionar.\n\u200B")
+        await update.message.reply_text("\u200B\n ☰  Catálogo\n Vazio.\n Use /additem Nome Peso para adicionar.\n\u200B")
         return
     lines = ["\u200B ☰  Catálogo de Itens\n"]
     for nome, peso in data:
@@ -746,15 +746,13 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     conn.close()
 
-    # Checa sobrecarga do alvo
+    # Checa sobrecarga do alvo, mas **não cancela**, só avisa
     target_before = get_player(target_id)
     total_depois_target = peso_total(target_before) + item_peso * qtd
+    aviso_sobrecarga = ""
     if total_depois_target > target_before['peso_max']:
         excesso = total_depois_target - target_before['peso_max']
-        await update.message.reply_text(
-            f"⚠️ {target_before['nome']} ficaria com sobrecarga de {excesso:.1f} kg. Transferência cancelada."
-        )
-        return
+        aviso_sobrecarga = f"⚠️ Atenção! {target_before['nome']} ficaria com sobrecarga de {excesso:.1f} kg."
 
     # Criar chave única com timestamp para evitar conflitos
     timestamp = int(time.time())
@@ -766,7 +764,7 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "qtd": qtd,
         "doador": uid_from,
         "alvo": target_id,
-        "expires": timestamp + 300  # 5 minutos para expirar
+        "expires": timestamp + 300  # 5 minutos
     }
 
     keyboard = [
@@ -778,11 +776,10 @@ async def dar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
         f"{user_tag}, {update.effective_user.first_name} quer te dar {item_nome} x{qtd}.\n"
-        "Aceita a transferência?",
+        f"{aviso_sobrecarga}\nAceita a transferência?",
         reply_markup=reply_markup
     )
 
-# Callback para confirmação/cancelamento
 async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -798,12 +795,10 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Transferência não encontrada ou expirada.")
             return
         
-        # Verificar se quem está confirmando é o alvo da transferência
         if transfer['alvo'] != user_id:
             await query.edit_message_text("❌ Você não pode confirmar esta transferência.")
             return
         
-        # Verificar se não expirou
         if time.time() > transfer['expires']:
             TRANSFER_PENDING.pop(transfer_key, None)
             await query.edit_message_text("❌ Transferência expirada.")
@@ -817,7 +812,7 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = get_conn()
         c = conn.cursor()
         try:
-            # Debita do doador, se ele tiver o item no inventário
+            # Debita do doador
             c.execute(
                 "SELECT quantidade, peso FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)",
                 (doador, item)
@@ -838,7 +833,6 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         (nova_qtd_doador, doador, item)
                     )
             else:
-                # Se o doador é admin e não tem o item, pega do catálogo
                 if is_admin(doador):
                     item_info = get_catalog_item(item)
                     if not item_info:
@@ -884,16 +878,19 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         TRANSFER_PENDING.pop(transfer_key, None)
 
-        # Recarrega pesos para mostrar detalhes
+        # Recarrega pesos e mostra sobrecarga caso exista
         giver_after = get_player(doador)
         target_after = get_player(alvo)
         total_giver = peso_total(giver_after)
         total_target = peso_total(target_after)
+        excesso = max(0, total_target - target_after['peso_max'])
+        aviso_sobrecarga = f"\n⚠️ {target_after['nome']} está com sobrecarga de {excesso:.1f} kg!" if excesso else ""
 
         await query.edit_message_text(
             f"✅ Transferência confirmada! {item} x{qtd} entregue.\n"
             f"📦 {giver_after['nome']}: {total_giver:.1f}/{giver_after['peso_max']} kg\n"
             f"📦 {target_after['nome']}: {total_target:.1f}/{target_after['peso_max']} kg"
+            f"{aviso_sobrecarga}"
         )
 
     # Cancelamento
@@ -905,7 +902,6 @@ async def transfer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Transferência não encontrada.")
             return
             
-        # Verificar se quem está cancelando é o alvo da transferência
         if transfer['alvo'] != user_id:
             await query.edit_message_text("❌ Você não pode cancelar esta transferência.")
             return
