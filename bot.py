@@ -41,10 +41,8 @@ PERICIAS_NORMAL = {normalizar(p): p for p in PERICIAS_LISTA}
 EDIT_PENDING = {}
 EDIT_TIMERS = {}  # Para timeouts de edição
 
-# Dicionário temporário para armazenar transferências pendentes
 TRANSFER_PENDING = {}
-
-ABANDON_PENDING = {}    # para /abandonar
+ABANDON_PENDING = {}
 
 KIT_BONUS = {
     "kit basico": 1,
@@ -121,6 +119,27 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS coma_bonus (
                     target_id BIGINT PRIMARY KEY,
                     bonus INTEGER DEFAULT 0
+                )''')
+    # Tabelas para sistema de turnos/XP
+    c.execute('''CREATE TABLE IF NOT EXISTS turnos (
+                    player_id BIGINT,
+                    data DATE,
+                    caracteres INTEGER,
+                    mencoes TEXT,
+                    PRIMARY KEY (player_id, data)
+                )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS xp_semana (
+                    player_id BIGINT,
+                    semana_inicio DATE,
+                    xp_total INTEGER DEFAULT 0,
+                    streak_atual INTEGER DEFAULT 0,
+                    PRIMARY KEY (player_id, semana_inicio)
+                )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS interacoes_mutuas (
+                    semana_inicio DATE,
+                    jogador1 BIGINT,
+                    jogador2 BIGINT,
+                    PRIMARY KEY (semana_inicio, jogador1, jogador2)
                 )''')
     conn.commit()
     conn.close()
@@ -294,6 +313,17 @@ def peso_total(player):
 def penalidade(player):
     return peso_total(player) > player["peso_max"]
 
+def penalidade_sobrecarga(player):
+    excesso = peso_total(player) - player["peso_max"]
+    if excesso <= 0:
+        return 0
+    if excesso <= 5:
+        return -1
+    elif excesso <= 10:
+        return -2
+    else:
+        return -3
+
 def anti_spam(user_id):
     now = time.time()
     if user_id in LAST_COMMAND and now - LAST_COMMAND[user_id] < COOLDOWN:
@@ -373,7 +403,7 @@ def reset_diario_rerolls():
             
         except Exception as e:
             logger.error(f"Erro no reset de rerolls: {e}")
-            time.sleep(60)  # Espera 1 minuto antes de tentar novamente
+            time.sleep(60)
 
 def is_admin(uid: int) -> bool:
     return uid in ADMIN_IDS
@@ -384,7 +414,6 @@ def mention(user):
     return user.first_name or "Jogador"
 
 def cleanup_expired_transfers():
-    """Remove transferências expiradas periodicamente"""
     while True:
         try:
             now = time.time()
@@ -396,12 +425,156 @@ def cleanup_expired_transfers():
             for key in expired_keys:
                 TRANSFER_PENDING.pop(key, None)
                 
-            time.sleep(300)  # Limpa a cada 5 minutos
+            time.sleep(300)
         except Exception as e:
             logger.error(f"Erro na limpeza de transferências: {e}")
             time.sleep(60)
 
+def semana_atual():
+    hoje = datetime.now()
+    segunda = hoje - timedelta(days=hoje.weekday())
+    return segunda.date()
+
+def xp_por_caracteres(n):
+    if n < 500:
+        return 0
+    elif n < 1000:
+        return 10
+    elif n < 1500:
+        return 15
+    elif n < 2000:
+        return 20
+    elif n <= 4096:
+        return 25
+    else:
+        return 25
+
+async def turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.chat.type == 'private':
+        await update.message.reply_text("Este comando só pode ser usado em grupos!")
+        return
+
+    uid = update.effective_user.id
+    username = update.effective_user.username
+    hoje = datetime.now().date()
+    semana = semana_atual()
+
+    texto = update.message.text or ""
+    texto_limpo = re.sub(r'^/turno', '', texto, flags=re.IGNORECASE).strip()
+    caracteres = len(texto_limpo)
+
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM turnos WHERE player_id=%s AND data=%s", (uid, hoje))
+    if c.fetchone():
+        conn.close()
+        await update.message.reply_text("Você já enviou seu turno hoje! Apenas 1 por dia é contabilizado.")
+        return
+
+    mencoes = set(re.findall(r"@(\w+)", texto_limpo))
+    if username:
+        mencoes.discard(username.lower())
+    mencoes = list(mencoes)
+    if len(mencoes) > 5:
+        mencoes = mencoes[:5]
+        await update.message.reply_text("⚠️ Só é possível mencionar até 5 jogadores por turno. Apenas os 5 primeiros serão considerados.")
+    mencoes_str = ",".join(mencoes) if mencoes else ""
+
+    xp = xp_por_caracteres(caracteres)
+
+    c.execute("SELECT data FROM turnos WHERE player_id=%s AND data >= %s ORDER BY data", (uid, semana))
+    dias = [row[0] for row in c.fetchall()]
+    streak_atual = 1
+    if dias:
+        prev = dias[-1]
+        if (hoje - prev).days == 1:
+            streak_atual = len(dias) + 1
+        else:
+            streak_atual = 1
+
+    bonus_streak = 0
+    if streak_atual == 3:
+        bonus_streak = 5
+    elif streak_atual == 5:
+        bonus_streak = 10
+    elif streak_atual == 7:
+        bonus_streak = 20
+
+    xp_dia = min(xp + bonus_streak, 25)
+
+    c.execute("INSERT INTO turnos (player_id, data, caracteres, mencoes) VALUES (%s, %s, %s, %s)",
+        (uid, hoje, caracteres, mencoes_str))
+    c.execute("INSERT INTO xp_semana (player_id, semana_inicio, xp_total, streak_atual) VALUES (%s, %s, %s, %s) "
+              "ON CONFLICT (player_id, semana_inicio) DO UPDATE SET xp_total = xp_semana.xp_total + %s, streak_atual = %s",
+              (uid, semana, xp_dia, streak_atual, xp_dia, streak_atual))
+    # Interação mútua diária
+    interacoes_bonificadas = set()
+    for mencionado in mencoes:
+        mencionado_id = username_to_id(f"@{mencionado}")
+        if mencionado_id and mencionado_id != uid:
+            c.execute("SELECT mencoes FROM turnos WHERE player_id=%s AND data=%s", (mencionado_id, hoje))
+            row = c.fetchone()
+            if row and row[0]:
+                mencoes_do_outra_pessoa = set(row[0].split(","))
+                if username and username.lower() in mencoes_do_outra_pessoa:
+                    par = tuple(sorted([uid, mencionado_id]))
+                    if par not in interacoes_bonificadas:
+                        c.execute("UPDATE xp_semana SET xp_total = xp_total + 5 WHERE player_id=%s AND semana_inicio=%s", (uid, semana))
+                        c.execute("UPDATE xp_semana SET xp_total = xp_total + 5 WHERE player_id=%s AND semana_inicio=%s", (mencionado_id, semana))
+                        interacoes_bonificadas.add(par)
+                        try:
+                            await context.bot.send_message(uid, f"🎉 Você e @{mencionado} mencionaram um ao outro no turno de hoje! Ambos ganharam +5 XP de interação mútua.", parse_mode="HTML")
+                            await context.bot.send_message(mencionado_id, f"🎉 Você e @{username} mencionaram um ao outro no turno de hoje! Ambos ganharam +5 XP de interação mútua.", parse_mode="HTML")
+                        except Exception as e:
+                            logger.warning(f"Falha ao enviar mensagem privada de bônus: {e}")
+    conn.commit()
+    conn.close()
+
+    msg = f"Turno registrado!\nCaracteres: {caracteres}\nXP ganho hoje: {xp}"
+    if bonus_streak:
+        msg += f"\nBônus de streak: +{bonus_streak} XP"
+    msg += f"\nStreak atual: {streak_atual} dias"
+    await update.message.reply_text(msg)
+
+def ranking_semanal(context=None):
+    semana = semana_atual()
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT player_id, xp_total FROM xp_semana WHERE semana_inicio=%s ORDER BY xp_total DESC LIMIT 3", (semana,))
+    top = c.fetchall()
+    players = {pid: get_player(pid) for pid, _ in top}
+    lines = ["🏆 Ranking Final da Semana:"]
+    medals = ['🥇', '🥈', '🥉']
+    for idx, (pid, xp) in enumerate(top):
+        nome = players[pid]['nome'] if players.get(pid) else f"ID:{pid}"
+        lines.append(f"{medals[idx]} <b>{nome}</b> – XP: {xp}")
+    texto = "\n".join(lines)
+
+    if context:
+        for admin_id in ADMIN_IDS:
+            try:
+                context.bot.send_message(admin_id, texto, parse_mode='HTML')
+            except Exception as e:
+                logger.error(f"Falha ao enviar ranking para admin {admin_id}: {e}")
+
+    c.execute("DELETE FROM xp_semana WHERE semana_inicio=%s", (semana,))
+    conn.commit()
+    conn.close()
+
+def thread_reset_xp():
+    while True:
+        now = datetime.now()
+        proxima = now.replace(hour=6, minute=0, second=0, microsecond=0)
+        while proxima.weekday() != 0:
+            proxima += timedelta(days=1)
+        if now >= proxima:
+            proxima += timedelta(days=7)
+        wait = (proxima - now).total_seconds()
+        time.sleep(wait)
+        ranking_semanal()
+
 # ================== COMANDOS ==================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
@@ -446,6 +619,9 @@ async def ficha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_peso = peso_total(player)
     sobre = "  ⚠︎  Você está com <b>SOBRECARGA</b>!" if penalidade(player) else ""
     text += f"\n 𖠩  𝗣𝗲𝘀𝗼 𝗧𝗼𝘁𝗮𝗹 ﹕ {total_peso:.1f}/{player['peso_max']}{sobre}\n\n"
+    penal = penalidade_sobrecarga(player)
+    if penal:
+        text += f"⚠︎ Penalidade ativa: {penal} em Força, Destreza e Furtividade!\n"
     text += "<blockquote>Para editar Atributos e Perícias, utilize o comando /editarficha.</blockquote>\n<blockquote>Para gerenciar seu Inventário, utilize o comando /inventario.</blockquote>\n\u200B"
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -629,6 +805,9 @@ async def inventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if penalidade(player):
         excesso = total_peso - player['peso_max']
         lines.append(f" ⚠︎ {excesso:.1f} kg de <b>SOBRECARGA</b>!")
+    penal = penalidade_sobrecarga(player)
+    if penal:
+        lines.append(f"⚠︎ Penalidade ativa: {penal} em Força, Destreza e Furtividade!")
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1361,7 +1540,7 @@ async def ajudar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_reroll=False):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
-        return False  # rolagem inválida
+        return False
 
     uid = update.effective_user.id
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
@@ -1369,7 +1548,7 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
     player = get_player(uid)
     if not player or len(context.args) < 1:
         await update.message.reply_text("Uso: /roll nome_da_pericia_ou_atributo")
-        return False  # rolagem inválida
+        return False
 
     key = " ".join(context.args)
     key_norm = normalizar(key)
@@ -1377,28 +1556,36 @@ async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE, consumir_rero
     bonus = 0
     found = False
     real_key = key
+    penal = 0
 
     if key_norm in ATRIBUTOS_NORMAL:
         real_key = ATRIBUTOS_NORMAL[key_norm]
         bonus += player['atributos'].get(real_key, 0)
         found = True
+        if real_key in ("Força", "Destreza"):
+            penal = penalidade_sobrecarga(player)
+            bonus += penal
     elif key_norm in PERICIAS_NORMAL:
         real_key = PERICIAS_NORMAL[key_norm]
         bonus += player['pericias'].get(real_key, 0)
         found = True
+        if real_key == "Furtividade":
+            penal = penalidade_sobrecarga(player)
+            bonus += penal
     else:
         await update.message.reply_text(
             "❌ Perícia/atributo não encontrado.\nVeja os nomes válidos em /ficha."
         )
-        return False  # rolagem inválida
+        return False
 
     dados = roll_dados()
     total = sum(dados) + bonus
     res = resultado_roll(sum(dados))
+    penal_msg = f" (Penalidade de sobrecarga: {penal})" if penal else ""
     await update.message.reply_text(
-        f"🎲 /roll {real_key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}\nTotal: {total} → {res}"
+        f"🎲 /roll {real_key}\nRolagens: {dados} → {sum(dados)}\nBônus: +{bonus}{penal_msg}\nTotal: {total} → {res}"
     )
-    return True  # rolagem válida
+    return True
 
 async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -1427,6 +1614,52 @@ async def reroll(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔄 Reroll usado! Rerolls restantes: {novos_rerolls}"
         )
 
+async def xp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    semana = semana_atual()
+    conn = get_conn()
+    c = conn.cursor()
+    # XP total + streak
+    c.execute("SELECT xp_total, streak_atual FROM xp_semana WHERE player_id=%s AND semana_inicio=%s", (uid, semana))
+    row = c.fetchone()
+    xp_total = row[0] if row else 0
+    streak = row[1] if row else 0
+    # Turnos por dia
+    c.execute("SELECT data, caracteres, mencoes FROM turnos WHERE player_id=%s AND data >= %s ORDER BY data", (uid, semana))
+    dias = c.fetchall()
+    lines = [f"📊 <b>Seu XP semanal:</b> {xp_total} XP", f"Streak atual: {streak} dias"]
+    for d in dias:
+        data, chars, menc = d
+        xp_chars = xp_por_caracteres(chars)
+        lines.append(f"📅 {data.strftime('%d/%m')}: {xp_chars} XP ({chars} caracteres)" + (f" | Menções: {menc}" if menc else ""))
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    keyboard = [[InlineKeyboardButton("Ver ranking semanal 🏆", callback_data="ver_ranking")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Veja o ranking semanal:", reply_markup=reply_markup)
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query.data == "ver_ranking":
+        await ranking(update, context)
+        await query.answer()
+
+async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    semana = semana_atual()
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT player_id, xp_total FROM xp_semana WHERE semana_inicio=%s ORDER BY xp_total DESC LIMIT 3", (semana,))
+    top = c.fetchall()
+    players = {pid: get_player(pid) for pid, _ in top}
+    lines = ["🏆 Ranking semanal:"]
+    medals = ['🥇', '🥈', '🥉']
+    for idx, (pid, xp) in enumerate(top):
+        nome = players[pid]['nome'] if players.get(pid) else f"ID:{pid}"
+        lines.append(f"{medals[idx]} <b>{nome}</b> – XP: {xp}")
+    if not top:
+        lines.append("Ninguém tem XP ainda nesta semana!")
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
 # ================== FLASK ==================
 flask_app = Flask(__name__)
 
@@ -1437,13 +1670,14 @@ def home():
 def run_flask():
     flask_app.run(host="0.0.0.0", port=10000)
 
-# ================== MAIN ==================
+# ========== MAIN ==========
 def main():
     init_db()
     threading.Thread(target=run_flask, daemon=True).start()
     threading.Thread(target=reset_diario_rerolls, daemon=True).start()
-    threading.Thread(target=cleanup_expired_transfers, daemon=True).start()  # Nova thread para limpeza
-    
+    threading.Thread(target=cleanup_expired_transfers, daemon=True).start()
+    threading.Thread(target=thread_reset_xp, daemon=True).start()
+
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ficha", ficha))
@@ -1466,6 +1700,10 @@ def main():
     app.add_handler(CommandHandler("roll", roll))
     app.add_handler(CommandHandler("reroll", reroll))
     app.add_handler(CommandHandler("editarficha", editarficha))
+    app.add_handler(CommandHandler("turno", turno))
+    app.add_handler(CommandHandler("xp", xp))
+    app.add_handler(CallbackQueryHandler(button_callback, pattern="^ver_ranking$"))
+    app.add_handler(CommandHandler("ranking", ranking))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber_edicao))
     app.run_polling()
 
