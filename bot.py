@@ -1262,17 +1262,11 @@ async def callback_abandonar(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
     elif data.startswith("cancel_abandonar_"):
-        try:
-            # Pega o último pedaço do callback_data, que é o uid
-            dono_uid = int(data.split("_")[-1])
-        except ValueError:
-            await query.edit_message_text("❌ Dados inválidos.")
-            return
-
-        if query.from_user.id != dono_uid:
+        _, _, uid_str = data.split("_", 2)
+        uid = int(uid_str)
+        if query.from_user.id != uid:
             await query.answer("Só o dono pode cancelar!", show_alert=True)
             return
-
         await query.edit_message_text("❌ Ação cancelada.")
         
 async def consumir(update: Update, context: ContextTypes.DEFAULT_TYPE):
