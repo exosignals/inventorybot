@@ -151,37 +151,6 @@ def init_db():
         c.execute("ALTER TABLE catalogo ADD COLUMN consumivel BOOLEAN DEFAULT FALSE;")
     except psycopg2.errors.DuplicateColumn:
         conn.rollback()  # ignora erro caso a coluna já exista
-        
-    # 🔫 Sistema de armas/munição
-    try:
-        c.execute("ALTER TABLE catalogo ADD COLUMN tipo_arma TEXT DEFAULT NULL;")
-    except psycopg2.errors.DuplicateColumn:
-        conn.rollback()
-    try:
-        c.execute("ALTER TABLE catalogo ADD COLUMN balas_max INTEGER DEFAULT NULL;")
-    except psycopg2.errors.DuplicateColumn:
-        conn.rollback()
-    try:
-        c.execute("ALTER TABLE catalogo ADD COLUMN bonus INTEGER DEFAULT 0;")
-    except psycopg2.errors.DuplicateColumn:
-        conn.rollback()
-    try:
-        c.execute("ALTER TABLE catalogo ADD COLUMN is_municao BOOLEAN DEFAULT FALSE;")
-    except psycopg2.errors.DuplicateColumn:
-        conn.rollback()
-    try:
-        c.execute("ALTER TABLE catalogo ADD COLUMN arma_alvo TEXT DEFAULT NULL;")
-    except psycopg2.errors.DuplicateColumn:
-        conn.rollback()
-    try:
-        c.execute("ALTER TABLE inventario ADD COLUMN nome_norm TEXT DEFAULT NULL;")
-    except psycopg2.errors.DuplicateColumn:
-        conn.rollback()
-    # índice único para upsert de inventário por nome normalizado
-    c.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS inventario_player_nome_norm_idx
-        ON inventario (player_id, nome_norm);
-    """)
     conn.commit()
     conn.close()
 
@@ -350,90 +319,6 @@ def list_catalog():
     data = c.fetchall()
     conn.close()
     return data
-    
-def get_arma(uid, nome_arma):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("""
-        SELECT nome, peso, quantidade, balas_atual, balas_max, bonus
-        FROM inventario
-        WHERE player_id=%s AND nome_norm=%s
-    """, (uid, normalizar(nome_arma)))
-    row = c.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return {
-        "nome": row[0], "peso": row[1], "quantidade": row[2],
-        "balas_atual": row[3], "balas_max": row[4], "bonus": row[5]
-    }
-
-def get_municao(uid, nome_arma):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("""
-        SELECT nome, peso, quantidade, arma_alvo
-        FROM inventario
-        WHERE player_id=%s AND arma_alvo=%s
-        LIMIT 1
-    """, (uid, normalizar(nome_arma)))
-    row = c.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return {
-        "nome": row[0], "peso": row[1], "quantidade": row[2], "arma_alvo": row[3]
-    }
-
-def usar_tiro(uid, arma_nome):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("""
-        UPDATE inventario
-        SET balas_atual = GREATEST(balas_atual - 1, 0)
-        WHERE player_id=%s AND nome_norm=%s AND balas_atual > 0
-        RETURNING balas_atual, bonus
-    """, (uid, normalizar(arma_nome)))
-    row = c.fetchone()
-    conn.commit()
-    conn.close()
-    return row if row else None
-
-def recarregar_arma(uid, arma_nome):
-    arma = get_arma(uid, arma_nome)
-    if not arma:
-        return "❌ Você não possui essa arma."
-    if arma["balas_atual"] >= arma["balas_max"]:
-        return "🔋 Sua arma já está carregada."
-
-    municao = get_municao(uid, arma_nome)
-    if not municao:
-        return "❌ Você não possui munição compatível."
-
-    necessario = arma["balas_max"] - arma["balas_atual"]
-    usar = min(necessario, municao["quantidade"])
-
-    conn = get_conn()
-    c = conn.cursor()
-    # Atualiza arma
-    c.execute("""
-        UPDATE inventario
-        SET balas_atual = balas_atual + %s
-        WHERE player_id=%s AND nome_norm=%s
-    """, (usar, uid, normalizar(arma_nome)))
-    # Atualiza munição
-    if usar >= municao["quantidade"]:
-        c.execute("DELETE FROM inventario WHERE player_id=%s AND nome_norm=%s",
-                  (uid, normalizar(municao["nome"])))
-    else:
-        c.execute("""
-            UPDATE inventario
-            SET quantidade = quantidade - %s
-            WHERE player_id=%s AND nome_norm=%s
-        """, (usar, uid, normalizar(municao["nome"])))
-    conn.commit()
-    conn.close()
-    return f"🔫 {arma['nome']} recarregada: {arma['balas_atual']+usar}/{arma['balas_max']} balas."
 
 def is_consumivel_catalogo(nome: str):
     item = get_catalog_item(nome)
@@ -995,79 +880,30 @@ async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def additem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
-        await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
+        await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
         return
     uid = update.effective_user.id
     if not is_admin(uid):
         await update.message.reply_text("❌ Apenas administradores podem usar este comando.")
         return
-
-    args = context.args
-    if len(args) < 2:
-        await update.message.reply_text("Uso: /additem Nome Peso [arma melee|range balas_max bonus] [municao alvo] [consumivel]")
+    if len(context.args) < 2:
+        await update.message.reply_text("Uso: /additem NomeDoItem Peso [consumivel]")
         return
-
-    nome = []
-    peso = None
-    tipo_arma = None
-    balas_max = None
-    bonus = 0
-    is_municao = False
-    arma_alvo = None
     consumivel = False
-    feedback = []
-
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        if arg == "arma":
-            tipo_arma = args[i+1]
-            if tipo_arma not in ("melee", "range"):
-                await update.message.reply_text("❌ Tipo de arma precisa ser melee ou range.")
-                return
-            feedback.append(f"arma {tipo_arma}")
-            if tipo_arma == "range":
-                balas_max = int(args[i+2])
-                bonus = int(args[i+3])
-                feedback.append(f"balas_max {balas_max}")
-                feedback.append(f"bônus {bonus}")
-                i += 4
-            else:
-                bonus = int(args[i+2])
-                feedback.append(f"bônus {bonus}")
-                i += 3
-        elif arg == "municao":
-            is_municao = True
-            arma_alvo = normalizar(args[i+1])
-            feedback.append(f"munição para {arma_alvo}")
-            i += 2
-        elif arg == "consumivel":
-            consumivel = True
-            feedback.append("consumível")
-            i += 1
-        elif arg.replace(",", ".").replace("kg", "").replace(".", "", 1).isdigit():
-            peso = float(arg.replace(",", ".").replace("kg", ""))
-            feedback.append(f"peso {peso}")
-            i += 1
-        else:
-            nome.append(arg)
-            i += 1
-
-    nome_final = " ".join(nome)
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO catalogo (nome, peso, tipo_arma, balas_max, bonus, is_municao, arma_alvo, consumivel)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (nome) DO UPDATE SET
-            peso=%s, tipo_arma=%s, balas_max=%s, bonus=%s, is_municao=%s, arma_alvo=%s, consumivel=%s
-    """, (nome_final, peso, tipo_arma, balas_max, bonus, is_municao, arma_alvo, consumivel,
-          peso, tipo_arma, balas_max, bonus, is_municao, arma_alvo, consumivel))
-    conn.commit()
-    conn.close()
-    msg = f"✅ {nome_final} cadastrado: " + ", ".join(feedback)
-    await update.message.reply_text(msg)
-
+    if context.args[-1].lower() in ("consumivel", "consumível"):
+        consumivel = True
+        peso_str = context.args[-2]
+        nome = " ".join(context.args[:-2])
+    else:
+        peso_str = context.args[-1]
+        nome = " ".join(context.args[:-1])
+    peso = parse_float_br(peso_str)
+    if not peso:
+        await update.message.reply_text("❌ Peso inválido. Use algo como 2,5")
+        return
+    add_catalog_item(nome, peso, consumivel)
+    await update.message.reply_text(f"✅ Item '{nome}' adicionado ao catálogo com {peso:.2f} kg. Consumível: {'sim' if consumivel else 'não'}")
+    
 async def delitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Ei! Espere um instante antes de usar outro comando.")
@@ -1560,65 +1396,34 @@ async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
     register_username(uid, update.effective_user.username, update.effective_user.first_name)
 
     if len(context.args) < 1:
-        await update.message.reply_text("Uso: /dano hp|sp [@jogador] [arma_nome]")
+        await update.message.reply_text("Uso: /dano hp|sp [@jogador]")
         return
     tipo = context.args[0].lower()
+    if tipo not in ("hp", "sp", "vida", "sanidade"):
+        await update.message.reply_text("Tipo inválido! Use hp/vida ou sp/sanidade.")
+        return
     alvo_id = uid
-    arma_nome = None
-
-    for arg in context.args[1:]:
-        if arg.startswith("@"):
-            alvo_id = username_to_id(arg)
-        else:
-            arma_nome = arg
+    alvo_tag = mention(update.effective_user)
+    if len(context.args) >= 2:
+        maybe_user = context.args[1]
+        t = username_to_id(maybe_user)
+        if t:
+            alvo_id = t
+            alvo_tag = maybe_user
 
     player = get_player(alvo_id)
-    atacante = get_player(uid)
+    if not player:
+        await update.message.reply_text("❌ Alvo não encontrado. Peça para a pessoa usar /start.")
+        return
+
     dado = random.randint(1, 6)
-    arma_bonus = 0
-    pericia_bonus = 0
-    txt_bala = ""
-
-    if arma_nome:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT tipo_arma, balas_max, bonus FROM catalogo WHERE LOWER(nome)=LOWER(%s)", (arma_nome,))
-        cat = c.fetchone()
-        conn.close()
-        if not cat or not cat[0]:
-            await update.message.reply_text("❌ Item não é arma reconhecida no catálogo.")
-            return
-        tipo_arma, balas_max, arma_bonus = cat
-        arma_bonus = arma_bonus or 0
-        if tipo_arma == "melee":
-            pericia_bonus = atacante['pericias'].get("Luta", 0)
-        elif tipo_arma == "range":
-            pericia_bonus = atacante['pericias'].get("Pontaria", 0)
-            if balas_max and balas_max > 0:
-                inv = get_arma(uid, arma_nome)
-                if inv:
-                    if inv["balas_atual"] is not None and inv["balas_atual"] == 0:
-                        await update.message.reply_text("❌ Sem munição!")
-                        return
-                    if inv["balas_atual"] > 0:
-                        usar_tiro(uid, arma_nome)
-                        txt_bala = f" (balas restantes: {inv['balas_atual']-1}/{balas_max})"
-                else:
-                    await update.message.reply_text("❌ Você não possui essa arma no inventário.")
-                    return
-
-    total_bonus = arma_bonus + pericia_bonus
-    total_dano = dado + total_bonus
     if tipo in ("hp", "vida"):
         before = player['hp']
-        after = max(0, before - total_dano)
+        after = max(0, before - dado)
         update_player_field(alvo_id, 'hp', after)
         msg = (
-            f"🎲 {mention(update.effective_user)} atacou {mention(player)}!\n"
+            f"🎲 {mention(update.effective_user)} causou dano em {alvo_tag}!\n"
             f"Rolagem: 1d6 → {dado}\n"
-            f"Bônus da arma: {arma_bonus}\n"
-            f"Bônus perícia: {pericia_bonus}\n"
-            f"Total: {total_dano}{txt_bala}\n"
             f"{player['nome']}: HP {before} → {after}"
         )
         if after == 0:
@@ -1626,14 +1431,11 @@ async def dano(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg)
     else:
         before = player['sp']
-        after = max(0, before - total_dano)
+        after = max(0, before - dado)
         update_player_field(alvo_id, 'sp', after)
         msg = (
-            f"🎲 {mention(update.effective_user)} causou dano mental em {mention(player)}!\n"
+            f"🎲 {mention(update.effective_user)} causou dano mental em {alvo_tag}!\n"
             f"Rolagem: 1d6 → {dado}\n"
-            f"Bônus da arma: {arma_bonus}\n"
-            f"Bônus perícia: {pericia_bonus}\n"
-            f"Total: {total_dano}{txt_bala}\n"
             f"{player['nome']}: SP {before} → {after}"
         )
         if after == 0:
@@ -1690,15 +1492,6 @@ async def autodano(update: Update, context: ContextTypes.DEFAULT_TYPE):
             trauma = random.choice(TRAUMAS)
             msg += f"\n😵 Trauma severo! {trauma}"
         await update.message.reply_text(msg)
-        
-async def recarregar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if len(context.args) < 1:
-        await update.message.reply_text("Uso: /recarregar NomeDaArma")
-        return
-    arma_nome = " ".join(context.args)
-    resultado = recarregar_arma(uid, arma_nome)
-    await update.message.reply_text(resultado)
 
 async def cura(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
@@ -2121,52 +1914,6 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, parse_mode="HTML")
     elif update.callback_query:  # botão
         await update.callback_query.message.reply_text(text, parse_mode="HTML")
-        
-async def removerinventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if not is_admin(uid):
-        await update.message.reply_text("❌ Apenas administradores podem usar este comando.")
-        return
-    if len(context.args) < 2:
-        await update.message.reply_text("Uso: /removerinventario @jogador NomeDoItem")
-        return
-    jogador_tag = context.args[0]
-    item_nome = " ".join(context.args[1:])
-    target_id = username_to_id(jogador_tag)
-    if not target_id:
-        await update.message.reply_text("❌ Jogador não encontrado.")
-        return
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("DELETE FROM inventario WHERE player_id=%s AND LOWER(nome)=LOWER(%s)", (target_id, item_nome))
-    conn.commit()
-    conn.close()
-    await update.message.reply_text(f"🗑️ Item '{item_nome}' removido do inventário de {jogador_tag}")
-
-async def verinventario(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 1:
-        await update.message.reply_text("Uso: /verinventario @jogador")
-        return
-    jogador_tag = context.args[0]
-    target_id = username_to_id(jogador_tag)
-    if not target_id:
-        await update.message.reply_text("❌ Jogador não encontrado.")
-        return
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("SELECT nome, quantidade, balas_atual, balas_max FROM inventario WHERE player_id=%s", (target_id,))
-    items = c.fetchall()
-    conn.close()
-    if not items:
-        await update.message.reply_text("Inventário vazio.")
-        return
-    lines = [f"Inventário de {jogador_tag}:"]
-    for nome, qtd, balas, balas_max in items:
-        line = f"{nome} x{qtd}"
-        if balas_max and balas is not None:
-            line += f" [{balas}/{balas_max} balas]"
-        lines.append(line)
-    await update.message.reply_text("\n".join(lines))
 
 # ================== FLASK ==================
 flask_app = Flask(__name__)
@@ -2202,7 +1949,6 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_consumir, pattern=r'^confirm_consumir_|^cancel_consumir_'))
     app.add_handler(CommandHandler("dano", dano))
     app.add_handler(CommandHandler("autodano", autodano))
-    app.add_handler(CommandHandler("recarregar", recarregar))
     app.add_handler(CommandHandler("cura", cura))
     app.add_handler(CommandHandler("autocura", autocura))
     app.add_handler(CommandHandler("terapia", terapia))
@@ -2215,8 +1961,6 @@ def main():
     app.add_handler(CommandHandler("xp", xp))
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^ver_ranking$"))
     app.add_handler(CommandHandler("ranking", ranking))
-    app.add_handler(CommandHandler("removerinventario", removerinventario))
-    app.add_handler(CommandHandler("verinventario", verinventario))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber_edicao))
     app.run_polling()
 
