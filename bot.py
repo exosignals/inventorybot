@@ -892,7 +892,11 @@ async def itens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
         await update.message.reply_text("⏳ Espere um instante antes de usar outro comando.")
         return
-    data = list_catalog()
+    try:
+        data = list_catalog()
+    except Exception as e:
+        await update.message.reply_text("Erro ao acessar o catálogo. Tente novamente ou peça para o admin reiniciar o bot.")
+        return
     if not data:
         await update.message.reply_text("\u200B\n ☰  Catálogo\n Vazio.\n Use /additem Nome Peso para adicionar.\n\u200B")
         return
@@ -928,14 +932,17 @@ async def additem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
         await update.message.reply_text("Uso: /additem NomeDoItem Peso")
         return
-    peso_str = context.args[-1]
     nome = " ".join(context.args[:-1])
+    peso_str = context.args[-1]
     peso = parse_float_br(peso_str)
     if not peso:
         await update.message.reply_text("❌ Peso inválido. Use algo como 2,5")
         return
-    add_catalog_item(nome, peso)
-    await update.message.reply_text(f"✅ Item '{nome}' adicionado ao catálogo com {peso:.2f} kg.")
+    try:
+        add_catalog_item(nome, peso)
+        await update.message.reply_text(f"✅ Item '{nome}' adicionado ao catálogo com {peso:.2f} kg.")
+    except Exception as e:
+        await update.message.reply_text("Erro ao adicionar item ao catálogo. Tente novamente.")
     
 async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
@@ -945,7 +952,6 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(uid):
         await update.message.reply_text("❌ Apenas administradores podem usar este comando.")
         return
-    # /addconsumivel Nome Peso [bonus (opcional)] [armas_compat (opcional para munição)]
     if len(context.args) < 2:
         await update.message.reply_text("Uso: /addconsumivel NomeDoItem Peso [bonus] [armas_compat]")
         return
@@ -964,16 +970,15 @@ async def addconsumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         if len(context.args) >= 3:
             armas_compat = " ".join(context.args[2:])
-    # Pergunta tipo de uso
-    await update.message.reply_text(
-        "Esse item consumível é de cura, dano, munição ou nenhum?\nResponda: cura/dano/municao/nenhum"
-    )
-    # Salva para receber resposta
     context.user_data['addconsumivel_pending'] = {
         "nome": nome, "peso": peso, "bonus": bonus, "armas_compat": armas_compat
     }
+    await update.message.reply_text(
+        "Esse item consumível é de cura, dano, munição ou nenhum?\nResponda: cura/dano/municao/nenhum"
+    )
     
 async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Só responde se houver contexto de addconsumivel
     if 'addconsumivel_pending' not in context.user_data:
         return
     tipo = update.message.text.strip().lower()
@@ -982,9 +987,12 @@ async def receber_tipo_consumivel(update: Update, context: ContextTypes.DEFAULT_
         return
     data = context.user_data.pop('addconsumivel_pending')
     nome, peso, bonus, armas_compat = data['nome'], data['peso'], data['bonus'], data['armas_compat']
-    add_catalog_item(nome, peso, consumivel=True, bonus=bonus, tipo=tipo, armas_compat=armas_compat)
-    await update.message.reply_text(f"✅ Consumível '{nome}' adicionado ao catálogo com {peso:.2f} kg. Bônus: {bonus}, Tipo: {tipo}.")
-
+    try:
+        add_catalog_item(nome, peso, consumivel=True, bonus=bonus, tipo=tipo, armas_compat=armas_compat)
+        await update.message.reply_text(f"✅ Consumível '{nome}' adicionado ao catálogo com {peso:.2f} kg. Bônus: {bonus}, Tipo: {tipo}.")
+    except Exception as e:
+        await update.message.reply_text("Erro ao adicionar consumível ao catálogo. Tente novamente.")
+  
 # ARMA: /addarma nome peso melee/range bonus [munição atual/max] (para range)
 async def addarma(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
@@ -1009,9 +1017,11 @@ async def addarma(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 await update.message.reply_text("Formato de munição inválido. Use 15/20.")
                 return
-    add_catalog_item(nome, peso, consumivel=False, bonus=0, tipo='', arma_tipo=arma_tipo, arma_bonus=arma_bonus, muni_atual=muni_atual, muni_max=muni_max)
-    await update.message.reply_text(f"✅ Arma '{nome}' ({arma_tipo}) adicionada ao catálogo. Bônus: {arma_bonus}" + (f", munição: {muni_atual}/{muni_max}" if arma_tipo == 'range' else ""))
-
+    try:
+        add_catalog_item(nome, peso, consumivel=False, bonus=0, tipo='', arma_tipo=arma_tipo, arma_bonus=arma_bonus, muni_atual=muni_atual, muni_max=muni_max)
+        await update.message.reply_text(f"✅ Arma '{nome}' ({arma_tipo}) adicionada ao catálogo. Bônus: {arma_bonus}" + (f", munição: {muni_atual}/{muni_max}" if arma_tipo == 'range' else ""))
+    except Exception as e:
+        await update.message.reply_text("Erro ao adicionar arma ao catálogo. Tente novamente.")
     
 async def delitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anti_spam(update.effective_user.id):
@@ -2147,8 +2157,8 @@ def main():
     app.add_handler(CommandHandler("xp", xp))
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^ver_ranking$"))
     app.add_handler(CommandHandler("ranking", ranking))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber_edicao))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber_tipo_consumivel)) # Para addconsumivel
+    # Adicione este handler para o tipo do consumível!
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), receber_tipo_consumivel))
     app.run_polling()
 
 if __name__ == "__main__":
